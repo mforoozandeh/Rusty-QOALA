@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --all-targets
+      - name: Test
+        run: cargo test --release
+      - name: Doc tests
+        run: cargo test --release --doc
+
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+    env:
+      # The MSRV job checks that the crate still compiles on the oldest
+      # supported toolchain; lint cleanliness is the `lint` job's business,
+      # and newer lints firing on an old compiler should not fail it.
+      RUSTFLAGS: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.82'
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --all-targets
+
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Documentation
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  examples:
+    name: examples converge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The short examples double as an end-to-end smoke test: each one
+      # reports a fidelity computed by an independent exact propagation of
+      # the pulse it produced.
+      - name: Two-spin transfer
+        run: cargo run --release --example z2z_2spin_1
+      - name: Strong coupling, shared control pair
+        run: cargo run --release --example z2z_2spin_2
+      - name: Benchmark harness
+        run: cargo run --release --example paper_benchmarks -- state-2spin-hetero --runs 2 --iters 20

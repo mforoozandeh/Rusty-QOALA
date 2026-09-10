@@ -1,0 +1,28 @@
+[package]
+name = "qoala"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Quantum Optimal control by Adaptive Low-cost Algorithm: GRAPE pulse optimisation for coupled two-level systems, with adaptive operator splitting"
+license = "MIT"
+authors = ["Mohammadali Foroozandeh"]
+readme = "README.md"
+repository = "https://github.com/mforoozandeh/Rusty-QOALA"
+documentation = "https://docs.rs/qoala"
+keywords = ["optimal-control", "grape", "quantum", "nmr", "spin-dynamics"]
+categories = ["science", "mathematics", "simulation"]
+exclude = ["/.github", "*.csv"]
+
+[dependencies]
+nalgebra = "0.33"
+nalgebra-sparse = "0.10"
+num-complex = "0.4"
+rand = "0.8"
+rand_chacha = "0.3"
+
+[dev-dependencies]
+approx = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

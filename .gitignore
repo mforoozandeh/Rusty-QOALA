@@ -1,0 +1,12 @@
+# Rust
+/target
+
+# Example output
+*.csv
+
+# JetBrains (RustRover, CLion, IntelliJ)
+/.idea
+*.iml
+
+# macOS
+.DS_Store
