@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "qoala-web",
+      "runtimeExecutable": "trunk",
+      "runtimeArgs": ["serve", "--config", "gui/Trunk.toml"],
+      "port": 8080
+    }
+  ]
+}

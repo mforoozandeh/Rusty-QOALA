@@ -48,11 +48,11 @@ use crate::error::{QoalaError, Result};
 use crate::linalg::{norm_2_state, real_trace_adjoint, CDense, CMat, EPS};
 use crate::rodrigues::{prepend_unit_row, propagator_from_elements, rodrigues_with_derivatives};
 use crate::splittings::SplitSet;
+use crate::time::Instant;
 use crate::types::{AdaptMethod, AdaptScale, PropCache, PropMethod, StateSpace};
 use nalgebra::DMatrix;
 use num_complex::Complex64;
 use std::borrow::Cow;
-use std::time::Instant;
 
 /// Stored forward pass: everything the backward sweep and the adaptivity
 /// comparison need.

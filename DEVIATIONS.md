@@ -147,3 +147,17 @@ These do not change any number, only how the code is shaped.
   which is the same information without the stack walk.
 - **Job identifiers.** MATLAB hashes the clock and process id with MD5; this
   uses a 128-bit mix of the same inputs, rendered the same way.
+- **Progress is a data channel, not only text.** MATLAB's only way out of a
+  running optimisation is the `fprintf` iteration table. `optim::ProgressSink`
+  receives the same rows as an `IterationReport` struct, and can stop the run
+  (`ExitFlag::Cancelled`, which the MATLAB has no counterpart for). The text
+  table is itself one such sink, so its output is unchanged.
+- **There is a graphical front end.** The MATLAB package is a set of scripts.
+  `gui/` adds an interface over the same library, as a desktop application and
+  as a browser page. It changes no numerics: it builds the same
+  `ControlOptions` the drivers do and calls the same optimiser.
+- **WebAssembly is a supported target.** On `wasm32-unknown-unknown` there is
+  no filesystem and no monotonic clock, so `examples_io`, `Reporter::file`,
+  `ReportSink::File` and the propagator cache are compiled out, timings go
+  through `web-time`, and `PropCache::Store` returns
+  `QoalaError::NotImplemented`. The numerics are identical on both targets.

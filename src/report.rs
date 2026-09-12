@@ -7,10 +7,15 @@
 //! MATLAB's `pad`, `num2str` with `%g`/`%e`/`%f` formats, and the SI-prefix
 //! helper `findprefix`.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::cell::RefCell;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
 
 /// Where report lines go.
@@ -18,7 +23,8 @@ use std::rc::Rc;
 pub enum ReportSink {
     /// Standard output, MATLAB's file id 1.
     Stdout,
-    /// An open file, appended to.
+    /// An open file, appended to.  Native only: `wasm32` has no filesystem.
+    #[cfg(not(target_arch = "wasm32"))]
     File(Rc<RefCell<File>>),
     /// Discard everything; useful in tests and library use.
     Silent,
@@ -28,6 +34,7 @@ impl std::fmt::Debug for ReportSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReportSink::Stdout => f.write_str("Stdout"),
+            #[cfg(not(target_arch = "wasm32"))]
             ReportSink::File(_) => f.write_str("File"),
             ReportSink::Silent => f.write_str("Silent"),
         }
@@ -63,7 +70,8 @@ impl Reporter {
         }
     }
 
-    /// Append the report to a file.
+    /// Append the report to a file.  Native only.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn file(path: &Path) -> std::io::Result<Self> {
         let f = std::fs::OpenOptions::new()
             .create(true)
@@ -79,6 +87,7 @@ impl Reporter {
     pub fn line(&self, s: &str) {
         match &self.sink {
             ReportSink::Stdout => println!("{s}"),
+            #[cfg(not(target_arch = "wasm32"))]
             ReportSink::File(f) => {
                 let _ = writeln!(f.borrow_mut(), "{s}");
             }

@@ -1,6 +1,6 @@
 [package]
 name = "qoala"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Quantum Optimal control by Adaptive Low-cost Algorithm: GRAPE pulse optimisation for coupled two-level systems, with adaptive operator splitting"
@@ -13,12 +13,28 @@ keywords = ["optimal-control", "grape", "quantum", "nmr", "spin-dynamics"]
 categories = ["science", "mathematics", "simulation"]
 exclude = ["/.github", "*.csv"]
 
+# The GUI is a workspace member but not a default one: `cargo build`,
+# `cargo test` and `cargo clippy` at the root still act on the published crate
+# alone, so the library's MSRV is not held hostage to a UI toolkit's.  Build it
+# with `cargo run -p qoala-gui`.
+[workspace]
+members = ["gui"]
+default-members = ["."]
+
 [dependencies]
 nalgebra = "0.33"
 nalgebra-sparse = "0.10"
 num-complex = "0.4"
 rand = "0.8"
 rand_chacha = "0.3"
+
+# wasm32 has no monotonic clock and no OS entropy source of its own: the time
+# shim in `src/time.rs` needs `web-time`, and `rand`'s `from_entropy` needs
+# `getrandom`'s JS backend.  rand 0.8 pins getrandom 0.2, so this is the right
+# major version.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+web-time = "1"
 
 [dev-dependencies]
 approx = "0.5"

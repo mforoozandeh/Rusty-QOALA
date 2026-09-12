@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>QOALA - pulse optimisation in your browser</title>
+    <meta
+      name="description"
+      content="Design a coupled spin system, pick a target, get an optimised pulse. Everything runs in your browser; nothing is sent anywhere."
+    />
+
+    <link data-trunk rel="rust" href="Cargo.toml" data-bin="qoala-gui" data-wasm-opt="z" />
+    <link
+      data-trunk
+      rel="rust"
+      href="Cargo.toml"
+      data-bin="qoala-worker"
+      data-type="worker"
+      data-loader-shim
+      data-wasm-opt="z"
+    />
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #1b1b1f;
+        color: #d8d8dc;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #loading {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.6rem;
+        text-align: center;
+        padding: 1rem;
+      }
+      #loading h1 {
+        font-size: 1.4rem;
+        font-weight: 600;
+        margin: 0;
+      }
+      #loading p {
+        margin: 0;
+        opacity: 0.7;
+        max-width: 32rem;
+      }
+      noscript {
+        display: block;
+        padding: 2rem;
+      }
+    </style>
+  </head>
+
+  <body>
+    <canvas id="qoala_canvas"></canvas>
+
+    <div id="loading">
+      <h1>QOALA</h1>
+      <p>Loading the optimiser. Everything runs here in your browser - nothing is uploaded.</p>
+    </div>
+
+    <noscript>
+      <h1>QOALA</h1>
+      <p>This page is a WebAssembly application and needs JavaScript enabled.</p>
+    </noscript>
+
+    <script>
+      // The worker script Trunk emits next to the page.  `runner_web.rs`
+      // reads this, so a host that puts the assets somewhere unusual can
+      // point at them without rebuilding.
+      window.qoala_worker_url = "./qoala-worker_loader.js";
+    </script>
+  </body>
+</html>

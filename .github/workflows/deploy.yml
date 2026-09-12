@@ -1,0 +1,76 @@
+name: Deploy the web application
+
+# Building on the host is a trap: Cloudflare Pages' build image has no Rust
+# toolchain and times out at 20 minutes, which a cold release build of
+# nalgebra can approach.  So the build happens here and only the output is
+# pushed.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries for eframe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      - name: Build
+        run: |
+          cargo install --locked trunk
+          trunk build --release --config gui/Trunk.toml
+      # One header file per host lives in deploy/; this picks the one the
+      # deployment step below understands.  Changing host means changing
+      # which file is copied and the one step that follows.
+      - name: Add the host's header file
+        run: cp deploy/_headers gui/dist/_headers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qoala-web
+          path: gui/dist
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    # Everything host-specific is in this one step, so moving host is a
+    # single edit.  It needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID
+    # in the repository secrets; without them the job is skipped rather than
+    # failing the workflow.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: qoala-web
+          path: dist
+      - name: Publish
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The Pages project name, which also fixes the default address:
+          # https://<PROJECT>.pages.dev
+          PROJECT: rusty-qoala
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "No deployment credentials configured; the build is attached to this run as an artifact."
+            exit 0
+          fi
+          # `pages deploy` cannot create a project without a terminal to ask
+          # in, so make sure one exists first.  Creating an existing project
+          # is an error, which is what the `||` swallows.
+          npx --yes wrangler@3 pages project create "$PROJECT" \
+            --production-branch main 2>/dev/null || true
+          npx --yes wrangler@3 pages deploy dist \
+            --project-name "$PROJECT" --branch main

@@ -1,0 +1,11 @@
+[build]
+target = "index.html"
+dist = "dist"
+# Relative asset paths, so the application works at any base URL: served from
+# the root of a domain, from a subdirectory, or straight off a laptop with
+# `python -m http.server`.
+public_url = "./"
+
+[serve]
+port = 8080
+open = false

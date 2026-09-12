@@ -1462,6 +1462,15 @@ fn parse_drift(
             }
             v
         }
+        // The scratch cache needs a filesystem, which `wasm32` does not have.
+        #[cfg(target_arch = "wasm32")]
+        PropCache::Store => {
+            let _ = cache_dir;
+            return Err(QoalaError::NotImplemented(
+                "prop_cache 'store' needs a filesystem; use 'carry' or 'calc' on wasm32".into(),
+            ));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         PropCache::Store => {
             let mut current = None;
             for &(q, p) in &adaptset {
@@ -1920,12 +1929,18 @@ fn report_bytes(out: &Reporter, label: &str, bytes: f64) {
 
 /// A short, unique-enough job identifier.
 fn generate_job_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    // `std::process::id` is one of the `unsupported` stubs on
+    // `wasm32-unknown-unknown`; there is only ever one "process" there, so the
+    // clock alone has to carry the uniqueness.
+    #[cfg(not(target_arch = "wasm32"))]
     let pid = std::process::id() as u128;
+    #[cfg(target_arch = "wasm32")]
+    let pid = 0u128;
     // A cheap 128-bit mix, rendered as hex; the MATLAB used an MD5 of the
     // clock and pid for the same purpose.
     let mut h: u128 = nanos ^ (pid << 64) ^ 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835;
@@ -1999,6 +2014,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn job_ids_are_distinct() {
         let a = generate_job_id();
         std::thread::sleep(std::time::Duration::from_millis(2));

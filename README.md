@@ -26,8 +26,12 @@ auxiliary-matrix method: a **21x speed-up** at the same accuracy.
 
 ```toml
 [dependencies]
-qoala = "1.0"
+qoala = "1.1"
 ```
+
+There is also a graphical front end - the same code as a desktop application
+or as a web page that runs entirely in the browser. See
+[The application](#the-application).
 
 Or from git, until it is published:
 
@@ -116,11 +120,69 @@ src/
   penalty.rs      waveform penalties
   prop_index.rs   sparse propagator index tables
   spinops.rs      spin operators, states, couplings, gates
+  gates.rs        Hilbert unitaries -> Liouville superoperators, gate library
   linalg.rs       dense/sparse complex matrix type
+  time.rs         clock shim, so the crate builds for wasm32
   types.rs        typed options; report.rs, error.rs, waveform.rs
 examples/         the MATLAB example scripts, plus the benchmark harness
 tests/            gradients, accuracy, end-to-end optimisation
+gui/              the application: desktop and browser, same source
+  src/setup.rs      the problem description, serde-serialisable
+  src/presets.rs    the five examples above, as one-click setups
+  src/run.rs        the optimisation, and the message stream out of it
+  src/app.rs        panels and plots
+  src/export.rs     CSV and JSON export
+  src/runner_*.rs   background thread natively, Web Worker in the browser
+deploy/           cross-origin isolation headers, one file per host
 ```
+
+## The application
+
+`gui/` is a front end over the same library: describe a spin system, pick a
+target, watch it converge, take the pulse away as a file. It runs two ways
+from one source.
+
+**Desktop.**
+
+```bash
+cargo run -p qoala-gui --release
+```
+
+**Browser.** Everything runs in the visitor's browser. There is no server, no
+account and no upload; hosting is static files.
+
+```bash
+cargo install --locked trunk
+trunk serve --config gui/Trunk.toml
+```
+
+Then open <http://localhost:8080>.
+
+To build for deployment, `trunk build --release --config gui/Trunk.toml` and
+serve `gui/dist` from anywhere - including `python3 -m http.server`. See
+[`deploy/README.md`](deploy/README.md).
+
+What it gives you:
+
+- A visual editor for the control map - which channel drives which spin -
+  which is the least obvious part of the library's API.
+- Presets for all five examples; the two-spin transfer is loaded on startup,
+  so the first click gives a converged pulse in about a second.
+- Infidelity against iteration on a log axis, the waveform as stairs in Hz,
+  and the splitting order and Trotter number live, climbing as the fidelity
+  improves.
+- A runtime estimate on the Run button, and a Cancel that works.
+- Exports: the waveform as CSV in Hz against seconds, and the whole setup as
+  JSON.
+- The whole setup encoded in the URL fragment, so a link reproduces it
+  exactly and can be sent to somebody else. Nothing is stored anywhere but
+  the link and the visitor's own browser.
+
+Two limits worth knowing. Four-spin systems are dimension 256 with dense
+256x256 propagators per slice; the browser build refuses them and points at
+the desktop one. And cancelling in the browser terminates the Web Worker, so
+the convergence curve is kept but the partial waveform is not - natively,
+cancellation is cooperative and the waveform comes back.
 
 ## How the code maps to the MATLAB
 

@@ -6,13 +6,16 @@
 
 pub mod linesearch;
 pub mod newton;
+pub mod progress;
+
+pub use progress::{IterationReport, NoProgress, ProgressSink, RecordingSink};
 
 use crate::config::ControlSystem;
 use crate::error::{QoalaError, Result};
 use crate::objfun::TrajData;
+use crate::time::Instant;
 use crate::types::ObjectiveFn;
 use nalgebra::{DMatrix, DVector};
-use std::time::Instant;
 
 /// What a value-plus-gradient call returns: diagnostics, the fidelity and its
 /// penalty terms, and one gradient per term.
@@ -22,7 +25,7 @@ pub type ValueGrad = (TrajData, Vec<f64>, Vec<DMatrix<f64>>);
 pub type ValueGradHess = (TrajData, Vec<f64>, Vec<DMatrix<f64>>, Vec<DMatrix<f64>>);
 
 /// Evaluation counters, the MATLAB `data.count` struct.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counters {
     /// Optimiser iterations.
     pub iter: usize,
