@@ -128,3 +128,5 @@ jobs:
         run: cargo run --release --example z2z_2spin_2
       - name: Benchmark harness
         run: cargo run --release --example paper_benchmarks -- state-2spin-hetero --runs 2 --iters 20
+      - name: ESCALADE, with and without the Hessian
+        run: cargo run --release --example escalade_grad_vs_hess

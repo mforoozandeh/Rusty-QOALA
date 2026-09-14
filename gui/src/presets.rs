@@ -1,8 +1,11 @@
-//! The five repository examples, as one-click setups.
+//! One-click setups: the five QOALA repository examples, and the two
+//! ESCALADE runs of `test_runs/test_escalade_visual.m`.
 //!
-//! Every number here is copied from the corresponding file in `examples/`, so
-//! clicking Run on a preset reproduces that example.
+//! Every QOALA number here is copied from the corresponding file in
+//! `examples/`, so clicking Run on a preset reproduces that example.
 
+use crate::escalade::{Direction, EscaladeSetup};
+use crate::problem::Problem;
 use crate::setup::{
     pair_count, pair_index, Component, Coupling, GateChoice, Operator, PenaltyChoice, Setup, Target,
 };
@@ -126,11 +129,11 @@ pub fn swap_3spin_1() -> Setup {
     s
 }
 
-/// Every preset, in the order the menu offers them.
+/// Every QOALA preset, in the order the menu offers them.
 ///
 /// The first is the default on load: it converges in a second or two, which
 /// is the point of having a default at all.
-pub fn all() -> Vec<Setup> {
+pub fn qoala() -> Vec<Setup> {
     vec![
         z2z_2spin_1(),
         swap_2spin_1(),
@@ -140,7 +143,56 @@ pub fn all() -> Vec<Setup> {
     ]
 }
 
-/// The setup the application starts with.
+/// The QOALA setup the application starts with.
 pub fn default_setup() -> Setup {
     z2z_2spin_1()
+}
+
+/// `test_escalade_visual.m`, first run: z to -y across 20 kHz in 100
+/// microseconds, for a 17 kHz field alone.
+///
+/// The script starts from a flat pulse at -0.5.  Under the amplitude limit a
+/// random start converges far faster, so the presets use a seeded one.
+pub fn escalade_b1_sensitive() -> EscaladeSetup {
+    EscaladeSetup {
+        name: "Broadband excitation".into(),
+        nspins: 51,
+        sw_hz: 20000.0,
+        rf_hz: 17000.0,
+        b1_spread: 0.0,
+        b1_fields: 1,
+        duration_s: 100e-6,
+        nslices: 50,
+        from: Direction::PlusZ,
+        to: Direction::MinusY,
+        use_hessian: true,
+        max_iter: 1000,
+        target_fidelity: 0.99,
+        seed: Some(7),
+    }
+}
+
+/// `test_escalade_visual.m`, second run: the same excitation, optimised
+/// across 31 fields from 0.8 to 1.2 times nominal.
+pub fn escalade_b1_compensated() -> EscaladeSetup {
+    EscaladeSetup {
+        name: "B1-compensated broadband excitation".into(),
+        b1_spread: 0.2,
+        b1_fields: 31,
+        ..escalade_b1_sensitive()
+    }
+}
+
+/// Every ESCALADE preset, in menu order.
+pub fn escalade() -> Vec<EscaladeSetup> {
+    vec![escalade_b1_sensitive(), escalade_b1_compensated()]
+}
+
+/// Every preset of both kinds.
+pub fn every() -> Vec<Problem> {
+    qoala()
+        .into_iter()
+        .map(Problem::Qoala)
+        .chain(escalade().into_iter().map(Problem::Escalade))
+        .collect()
 }

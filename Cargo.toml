@@ -27,6 +27,11 @@ nalgebra-sparse = "0.10"
 num-complex = "0.4"
 rand = "0.8"
 rand_chacha = "0.3"
+# ESCALADE's optimiser.  Default features are off: they pull in `rand` 0.9 and
+# `getrandom` 0.3, which needs its own wasm configuration, and nothing here
+# uses argmin's stochastic solvers.
+argmin = { version = "0.11", default-features = false }
+argmin-math = { version = "0.5", default-features = false, features = ["nalgebra_v0_33"] }
 
 # wasm32 has no monotonic clock and no OS entropy source of its own: the time
 # shim in `src/time.rs` needs `web-time`, and `rand`'s `from_entropy` needs

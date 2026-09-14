@@ -22,6 +22,14 @@ On the paper's own two-spin benchmark this port reaches an infidelity of
 3e-8 in 0.11 s of objective time, against 2.3 s for the exact
 auxiliary-matrix method: a **21x speed-up** at the same accuracy.
 
+The crate also ports **ESCALADE**, by M. Foroozandeh and P. Singh: the
+uncoupled, single-spin method QOALA extends to coupled spins. With nothing
+coupling the spins, the closed-form propagators are all there is, so ESCALADE
+can afford the exact Hessian. It designs one pulse for a whole band of
+resonance offsets, and optionally for a spread of field strengths as well,
+which is how a pulse is made robust to B1 inhomogeneity. See
+[ESCALADE](#escalade).
+
 ## Installation
 
 ```toml
@@ -82,6 +90,7 @@ cargo run --release --example z2z_3spin_1        # three-spin chain
 cargo run --release --example swap_2spin_1       # SWAP gate
 cargo run --release --example swap_3spin_1       # SWAP across a three-spin chain
 cargo run --release --example paper_benchmarks -- state-2spin-hetero
+cargo run --release --example escalade_grad_vs_hess   # ESCALADE, see below
 ```
 
 Each writes its optimised pulse to CSV and prints a fidelity computed by an
@@ -102,6 +111,58 @@ target. Pass `state-2spin-hetero`, `state-2spin-homo`, `state-3spin-hetero`,
 `state-4spin-mixed`, `gate-2spin-hetero` or `gate-3spin-hetero`, plus optional
 `--runs`, `--steps` and `--iters`.
 
+## ESCALADE
+
+```rust
+use qoala::escalade::{escalade, magnetisation, Escalade, States};
+
+// z to -y across 20 kHz, with a 17 kHz field, in 100 microseconds.
+let optimised = escalade(&Escalade {
+    nspins: 51,                                  // spins spread across the band
+    sw: 20000.0,                                 // bandwidth, Hz
+    rf: vec![17000.0],                           // field, Hz; several values for B1 robustness
+    tau_p: 100e-6,                               // seconds
+    np_pulse: 50,                                // pulse points
+    initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
+    target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+    use_hessian: true,                           // Newton trust region on the exact Hessian
+    seed: Some(1),
+    ..Default::default()
+})?;
+
+println!("{:.4} after {} iterations", optimised.fidelity, optimised.counters.iter);
+# Ok::<(), qoala::error::QoalaError>(())
+```
+
+```text
+cargo run --release --example escalade_grad_vs_hess   # Hessian against gradient only
+cargo run --release --example escalade_b1             # B1-sensitive against B1-compensated
+```
+
+These port the two scripts in the MATLAB's `test_runs/`. On the first, both
+optimisers reach 99 % in under a tenth of a second. The second writes the
+pulse, the excitation profile, the map of Iy over offset and field, and the
+dphi/dB1 curve as CSV; optimising over 0.8 to 1.2 times the field lifts the
+worst-case fidelity across that range from 0.84 to 0.95.
+
+`escalade::profile` computes the offset profile, the B1 map and the phase
+sensitivity of any pulse, from the same propagators the optimiser uses.
+
+| MATLAB | Rust |
+|---|---|
+| `main/ESCALADE.m` | `escalade/solve.rs` |
+| `main/readDefaults.m`, `main/readSettings.m` | `escalade/settings.rs` |
+| `main/gradhess_vectorized_B1_parallel.m`, `main/gradhess_vectorized.m` | `escalade/objective.rs` |
+| `main/derivatives_vectorized.m`, `main/LL_vectorized.m` | `escalade/propagators.rs` |
+| `visualisation/ESCALADE_pulse_sim.m`, `visualisation/ESCALADE_Bloch_B1.m` | `escalade/profile.rs` |
+
+Two things work differently, both described in
+[`DEVIATIONS.md`](DEVIATIONS.md). `fmincon` is replaced by
+[argmin](https://argmin-rs.org): a trust region on the Hessian, or L-BFGS on
+the gradient. And the amplitude limit is on the field itself,
+`sqrt(x^2 + y^2) <= rf`, kept by a penalty, where the MATLAB bounds each
+quadrature separately.
+
 ## Repository layout
 
 ```text
@@ -114,6 +175,11 @@ src/
   optim/          optimiser
     newton.rs       LBFGS and Newton-Raphson
     linesearch.rs   Wolfe-condition line search
+  escalade/       ESCALADE: uncoupled spins across a band
+    solve.rs        the driver, and argmin's trust region and L-BFGS
+    objective.rs    fidelity, gradient and Hessian over offsets and fields
+    propagators.rs  SU(2) propagators and their first and second derivatives
+    profile.rs      offset profiles, B1 maps, phase sensitivity
   rodrigues.rs    closed-form single-spin propagators and derivatives
   splittings.rs   operator splittings, orders 0-6, with Trotterisation
   propagate.rs    Pade, Taylor and Krylov matrix exponentials
@@ -127,8 +193,10 @@ src/
 examples/         the MATLAB example scripts, plus the benchmark harness
 tests/            gradients, accuracy, end-to-end optimisation
 gui/              the application: desktop and browser, same source
-  src/setup.rs      the problem description, serde-serialisable
-  src/presets.rs    the five examples above, as one-click setups
+  src/setup.rs      the QOALA problem description, serde-serialisable
+  src/escalade.rs   the ESCALADE problem description, and its analysis
+  src/problem.rs    either of the two, as stored, shared and run
+  src/presets.rs    the examples above, as one-click setups
   src/run.rs        the optimisation, and the message stream out of it
   src/app.rs        panels and plots
   src/export.rs     CSV and JSON export
@@ -164,10 +232,16 @@ serve `gui/dist` from anywhere - including `python3 -m http.server`. See
 
 What it gives you:
 
-- A visual editor for the control map - which channel drives which spin -
+- Both algorithms behind one switch. ESCALADE edits a band, a field (with an
+  optional B1 spread) and a pulse; QOALA edits a coupled spin system.
+- A visual editor for QOALA's control map - which channel drives which spin -
   which is the least obvious part of the library's API.
-- Presets for all five examples; the two-spin transfer is loaded on startup,
-  so the first click gives a converged pulse in about a second.
+- Presets for the five QOALA examples and the two ESCALADE runs of
+  `test_escalade_visual.m`; the two-spin transfer is loaded on startup, so
+  the first click gives a converged pulse in about a second.
+- For an ESCALADE pulse, a choice of three views under the convergence plot:
+  the waveform, the excitation profile across offsets, and B1 robustness - a
+  map of Iy over offset and field, beside the dphi/dB1 curve.
 - Infidelity against iteration on a log axis, the waveform as stairs in Hz,
   and the splitting order and Trotter number live, climbing as the fidelity
   improves.
@@ -229,7 +303,7 @@ functions apply to every propagator.
 
 ## Verification
 
-`cargo test` runs 81 tests. There is no MATLAB in the loop; every check is
+`cargo test` runs 121 tests. There is no MATLAB in the loop; every check is
 self-contained and tests the mathematics rather than a stored output.
 
 - **Gradients against finite differences.** Every objective function's analytic
@@ -258,6 +332,14 @@ self-contained and tests the mathematics rather than a stored output.
 - **End to end.** Optimisations must converge above 99.9 %, the adaptive ladder
   must climb as the infidelity falls, and adaptive and fixed fourth-order runs
   must land within 1 % of each other.
+- **ESCALADE.** The SU(2) propagators are checked against `expm`, their first
+  and second control derivatives against finite differences on both sides of
+  the zero-field series switch, and the full Hessian of the objective against
+  a finite difference of its gradient over several spins and two weighted
+  fields. Runs with and without the Hessian must reach 99 %, with a fidelity
+  that matches an independent measurement of the magnetisation to 1e-9; a
+  pulse started at twice the amplitude limit must be brought back to it; and
+  optimising over a field spread must improve the worst case across it.
 
 ## Differences from the MATLAB
 
@@ -269,6 +351,12 @@ in [`DEVIATIONS.md`](DEVIATIONS.md).
 
 ## References
 
+- QOALA: D. L. Goodwin, P. Singh and M. Foroozandeh, "Adaptive optimal
+  control of entangled qubits", *Science Advances* **8**(49), eabq4244 (2022).
+  <https://doi.org/10.1126/sciadv.abq4244>
+- ESCALADE: M. Foroozandeh and P. Singh, "Optimal control of spins by
+  analytical Lie algebraic derivatives", *Automatica* **129**, 109611 (2021).
+  <https://doi.org/10.1016/j.automatica.2021.109611>
 - Auxiliary matrix method: <http://dx.doi.org/10.1063/1.4928978>
 - Auxiliary matrix Krylov method: <http://dx.doi.org/10.5258/soton/t0003>
 - Spillout-norm square penalty: <http://dx.doi.org/10.1063/1.4949534>
@@ -285,8 +373,15 @@ the loop at build time or run time. It follows the original's structure closely
 enough that a change made to one can be found in the other, and every place it
 departs is recorded in [`DEVIATIONS.md`](DEVIATIONS.md).
 
-If you use this for published work, please cite the QOALA paper and the
-underlying methods listed above, not just this port.
+If you use this for published work, please cite the QOALA and ESCALADE papers
+and the underlying methods listed above, not just this port:
+
+- D. L. Goodwin, P. Singh and M. Foroozandeh, "Adaptive optimal control of
+  entangled qubits", *Science Advances* **8**(49), eabq4244 (2022).
+  <https://doi.org/10.1126/sciadv.abq4244>
+- M. Foroozandeh and P. Singh, "Optimal control of spins by analytical Lie
+  algebraic derivatives", *Automatica* **129**, 109611 (2021).
+  <https://doi.org/10.1016/j.automatica.2021.109611>
 
 ## Licence
 

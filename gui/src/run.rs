@@ -6,15 +6,19 @@
 //! Worker in the browser - but [`run_to_sink`] below is the same code on both
 //! sides of that line.
 
+use nalgebra::DMatrix;
 use qoala::drivers::{
     random_pulse, state2state_xy_with_progress, universal_gate_xy_with_progress, GateSynthesis,
     StateTransfer, Tuning,
 };
+use qoala::escalade::escalade_with_progress;
 use qoala::optim::{IterationReport, ProgressSink};
 use qoala::report::Reporter;
 use qoala::types::Penalty;
 use serde::{Deserialize, Serialize};
 
+use crate::escalade::EscaladeSetup;
+use crate::problem::Problem;
 use crate::setup::{Setup, Target};
 
 /// One row of progress, in a form that survives `postMessage`.
@@ -32,9 +36,10 @@ pub struct Progress {
     pub gradient_norm: f64,
     /// Line-search step length.
     pub alpha: Option<f64>,
-    /// Splitting order the adaptive step has reached.
+    /// Splitting order the adaptive step has reached; zero for ESCALADE,
+    /// which does not split.
     pub split_order: usize,
-    /// Trotter number the adaptive step has reached.
+    /// Trotter number the adaptive step has reached; zero for ESCALADE.
     pub trotter_number: usize,
     /// Wall-clock seconds since the run started.
     pub elapsed_s: f64,
@@ -65,8 +70,8 @@ impl From<&IterationReport> for Progress {
 /// What a finished run produced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Finished {
-    /// The waveform, row-major: `waveform[slice][channel]`, dimensionless in
-    /// `[-1, 1]` as the optimiser works in.
+    /// The waveform, row-major: `waveform[slice][channel]`, dimensionless as
+    /// the optimiser works in.
     pub waveform: Vec<Vec<f64>>,
     /// Why the optimiser stopped.
     pub exit_message: String,
@@ -82,7 +87,7 @@ pub struct Finished {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RunMessage {
     /// Transport detail: the Web Worker has installed its message handler and
-    /// is safe to send a setup to.  A worker that is still loading its own
+    /// is safe to send a problem to.  A worker that is still loading its own
     /// WebAssembly drops anything posted to it, so the page waits for this
     /// before handing over the work.  Nothing else produces it and the
     /// interface ignores it.
@@ -119,23 +124,27 @@ impl<S: MessageSink> ProgressSink for Bridge<'_, S> {
     }
 }
 
-/// Run the optimisation described by `setup`, reporting into `sink`.
+/// Run the optimisation described by `problem`, reporting into `sink`.
 ///
 /// Always finishes by sending exactly one [`RunMessage::Finished`] or
 /// [`RunMessage::Failed`].
-pub fn run_to_sink<S: MessageSink>(setup: &Setup, sink: &mut S) {
-    let problems = setup.problems();
+pub fn run_to_sink<S: MessageSink>(problem: &Problem, sink: &mut S) {
+    let problems = problem.problems();
     if !problems.is_empty() {
         sink.send(RunMessage::Failed(problems.join("; ")));
         return;
     }
-    match run_inner(setup, sink) {
+    let outcome = match problem {
+        Problem::Qoala(setup) => run_qoala(setup, sink),
+        Problem::Escalade(setup) => run_escalade(setup, sink),
+    };
+    match outcome {
         Ok(finished) => sink.send(RunMessage::Finished(Box::new(finished))),
         Err(e) => sink.send(RunMessage::Failed(e)),
     }
 }
 
-fn run_inner<S: MessageSink>(setup: &Setup, sink: &mut S) -> Result<Finished, String> {
+fn run_qoala<S: MessageSink>(setup: &Setup, sink: &mut S) -> Result<Finished, String> {
     let interaction = setup.interaction().map_err(|e| e.to_string())?;
     let cartops = setup.cartops();
     let guess = random_pulse(setup.nslices, setup.nchannels(), setup.seed);
@@ -195,20 +204,34 @@ fn run_inner<S: MessageSink>(setup: &Setup, sink: &mut S) -> Result<Finished, St
     }
     .map_err(|e| e.to_string())?;
 
-    let (rows, cols) = optimised.waveform.shape();
-    let waveform = (0..rows)
-        .map(|r| (0..cols).map(|c| optimised.waveform[(r, c)]).collect())
-        .collect();
-
     let iterations = optimised.data.count.iter;
     let fidelity = optimised.data.fx_store[(iterations, 1)];
     let elapsed_s = optimised.data.timer[(iterations, 1)];
 
     Ok(Finished {
-        waveform,
+        waveform: rows(&optimised.waveform),
         exit_message: optimised.exitflag.message().to_string(),
         fidelity,
         elapsed_s: if elapsed_s.is_nan() { 0.0 } else { elapsed_s },
         iterations,
     })
+}
+
+fn run_escalade<S: MessageSink>(setup: &EscaladeSetup, sink: &mut S) -> Result<Finished, String> {
+    let optimised =
+        escalade_with_progress(&setup.spec(), &mut Bridge(sink)).map_err(|e| e.to_string())?;
+    Ok(Finished {
+        waveform: rows(&optimised.pulse),
+        exit_message: optimised.exitflag.message().to_string(),
+        fidelity: optimised.fidelity,
+        elapsed_s: optimised.elapsed_s,
+        iterations: optimised.counters.iter,
+    })
+}
+
+/// A matrix as `rows[row][column]`.
+fn rows(m: &DMatrix<f64>) -> Vec<Vec<f64>> {
+    (0..m.nrows())
+        .map(|r| (0..m.ncols()).map(|c| m[(r, c)]).collect())
+        .collect()
 }

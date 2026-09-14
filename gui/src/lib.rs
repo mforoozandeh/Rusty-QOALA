@@ -1,4 +1,4 @@
-//! QOALA in a window, or in a browser tab.
+//! QOALA and ESCALADE in a window, or in a browser tab.
 //!
 //! `cargo run -p qoala-gui` gives the desktop application; `trunk serve` in
 //! this directory gives the web one.  Same source both ways - the only
@@ -10,10 +10,12 @@
 //! build runs the optimisation inside.
 
 pub mod app;
+pub mod escalade;
 pub mod estimate;
 pub mod export;
 pub mod platform;
 pub mod presets;
+pub mod problem;
 pub mod run;
 pub mod setup;
 pub mod waveform;

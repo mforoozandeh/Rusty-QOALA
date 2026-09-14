@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
+use crate::problem::Problem;
 use crate::run::{run_to_sink, MessageSink, RunMessage};
-use crate::setup::Setup;
 
 struct ChannelSink {
     tx: Sender<RunMessage>,
@@ -31,15 +31,15 @@ pub struct Runner {
 }
 
 impl Runner {
-    /// Start `setup` on a background thread.
-    pub fn start(setup: Setup) -> Self {
+    /// Start `problem` on a background thread.
+    pub fn start(problem: Problem) -> Self {
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let mut sink = ChannelSink {
             tx,
             cancel: Arc::clone(&cancel),
         };
-        std::thread::spawn(move || run_to_sink(&setup, &mut sink));
+        std::thread::spawn(move || run_to_sink(&problem, &mut sink));
         Runner { rx, cancel }
     }
 

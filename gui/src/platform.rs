@@ -4,7 +4,7 @@
 //! Natively, the URL functions work on a `qoala://` style string so that the
 //! same button does something sensible in the desktop app.
 
-use crate::setup::Setup;
+use crate::problem::Problem;
 
 /// Facts about the host that change what the interface offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,44 +74,45 @@ fn decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// The fragment a setup encodes to, without the leading `#`.
-pub fn fragment_for_setup(setup: &Setup) -> Result<String, String> {
-    let json = serde_json::to_string(setup).map_err(|e| e.to_string())?;
+/// The fragment a problem encodes to, without the leading `#`.
+///
+/// The key stays `setup=`, so links made before ESCALADE keep working.
+pub fn fragment_for_problem(problem: &Problem) -> Result<String, String> {
+    let json = serde_json::to_string(problem).map_err(|e| e.to_string())?;
     Ok(format!("setup={}", encode(&json)))
 }
 
-/// Read a setup out of a fragment, ignoring anything that is not one.
-pub fn setup_from_fragment(fragment: &str) -> Option<Setup> {
+/// Read a problem out of a fragment, ignoring anything that is not one.
+pub fn problem_from_fragment(fragment: &str) -> Option<Problem> {
     let fragment = fragment.trim_start_matches('#');
     for part in fragment.split('&') {
         if let Some(value) = part.strip_prefix("setup=") {
-            let json = decode(value)?;
-            return serde_json::from_str(&json).ok();
+            return Problem::from_json(&decode(value)?);
         }
     }
     None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn setup_from_url() -> Option<Setup> {
+pub fn problem_from_url() -> Option<Problem> {
     // The desktop application accepts one as a command-line argument, which
     // makes a shared link work by paste.
     let arg = std::env::args().nth(1)?;
     let fragment = arg.split_once('#').map(|(_, f)| f).unwrap_or(&arg);
-    setup_from_fragment(fragment)
+    problem_from_fragment(fragment)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn setup_from_url() -> Option<Setup> {
+pub fn problem_from_url() -> Option<Problem> {
     let hash = web_sys::window()?.location().hash().ok()?;
-    setup_from_fragment(&hash)
+    problem_from_fragment(&hash)
 }
 
-/// A link that reproduces this setup, and which also updates the address bar
-/// so the browser's own share and bookmark actions pick it up.
+/// A link that reproduces this problem, and which also updates the address
+/// bar so the browser's own share and bookmark actions pick it up.
 #[cfg(target_arch = "wasm32")]
-pub fn url_for_setup(setup: &Setup) -> Result<String, String> {
-    let fragment = fragment_for_setup(setup)?;
+pub fn url_for_problem(problem: &Problem) -> Result<String, String> {
+    let fragment = fragment_for_problem(problem)?;
     let window = web_sys::window().ok_or("no window")?;
     let location = window.location();
     let base = format!(
@@ -128,8 +129,8 @@ pub fn url_for_setup(setup: &Setup) -> Result<String, String> {
 /// paste it after the address of a hosted copy, or hand it to the desktop
 /// binary as an argument.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn url_for_setup(setup: &Setup) -> Result<String, String> {
-    Ok(format!("#{}", fragment_for_setup(setup)?))
+pub fn url_for_problem(problem: &Problem) -> Result<String, String> {
+    Ok(format!("#{}", fragment_for_problem(problem)?))
 }
 
 #[cfg(test)]
@@ -138,24 +139,36 @@ mod tests {
     use crate::presets;
 
     #[test]
-    fn a_setup_survives_the_url_fragment() {
-        for setup in presets::all() {
-            let fragment = fragment_for_setup(&setup).unwrap();
+    fn a_problem_survives_the_url_fragment() {
+        for problem in presets::every() {
+            let fragment = fragment_for_problem(&problem).unwrap();
             assert!(!fragment.contains('#'));
-            let back = setup_from_fragment(&fragment).expect("decode");
-            assert_eq!(back, setup);
+            let back = problem_from_fragment(&fragment).expect("decode");
+            assert_eq!(back, problem);
             // And with the leading marker a browser would hand back.
-            let back = setup_from_fragment(&format!("#{fragment}")).expect("decode");
-            assert_eq!(back, setup);
+            let back = problem_from_fragment(&format!("#{fragment}")).expect("decode");
+            assert_eq!(back, problem);
         }
+    }
+
+    /// A link shared before ESCALADE carries a bare QOALA setup.
+    #[test]
+    fn an_old_link_still_opens() {
+        let setup = presets::swap_2spin_1();
+        let json = serde_json::to_string(&setup).unwrap();
+        let fragment = format!("#setup={}", encode(&json));
+        assert_eq!(
+            problem_from_fragment(&fragment),
+            Some(Problem::Qoala(setup))
+        );
     }
 
     #[test]
     fn junk_fragments_are_ignored_rather_than_panicking() {
-        assert!(setup_from_fragment("").is_none());
-        assert!(setup_from_fragment("#other=1").is_none());
-        assert!(setup_from_fragment("setup=not%20json").is_none());
-        assert!(setup_from_fragment("setup=%").is_none());
-        assert!(setup_from_fragment("setup=%ZZ").is_none());
+        assert!(problem_from_fragment("").is_none());
+        assert!(problem_from_fragment("#other=1").is_none());
+        assert!(problem_from_fragment("setup=not%20json").is_none());
+        assert!(problem_from_fragment("setup=%").is_none());
+        assert!(problem_from_fragment("setup=%ZZ").is_none());
     }
 }

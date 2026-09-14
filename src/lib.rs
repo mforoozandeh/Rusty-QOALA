@@ -8,6 +8,14 @@
 //! part handled by a few precomputed propagators, then picks the splitting
 //! order and Trotter number on the fly.
 //!
+//! The method is described in D. L. Goodwin, P. Singh and M. Foroozandeh,
+//! "Adaptive optimal control of entangled qubits", *Science Advances* 8(49),
+//! eabq4244 (2022), <https://doi.org/10.1126/sciadv.abq4244>.  The single-spin
+//! method it extends, ported here as [`escalade`], is M. Foroozandeh and
+//! P. Singh, "Optimal control of spins by analytical Lie algebraic
+//! derivatives", *Automatica* 129, 109611 (2021),
+//! <https://doi.org/10.1016/j.automatica.2021.109611>.
+//!
 //! ## Where to start
 //!
 //! * [`drivers`] - `state2state_xy` and `universal_gate_xy` wrap the whole
@@ -21,6 +29,9 @@
 //! * [`gates`] - turn any Hilbert-space unitary into the Liouville-space
 //!   superoperator a gate optimisation targets, plus a library of the usual
 //!   one- and two-qubit gates.
+//! * [`escalade`] - ESCALADE, the uncoupled single-spin method QOALA
+//!   extends: one pulse for a band of offsets and a spread of field
+//!   strengths, optimised on the exact Hessian.
 //!
 //! ## The numerical layers
 //!
@@ -40,6 +51,7 @@
 pub mod config;
 pub mod drivers;
 pub mod error;
+pub mod escalade;
 /// CSV writers the examples use; not available on `wasm32`, which has no
 /// filesystem.
 #[cfg(not(target_arch = "wasm32"))]

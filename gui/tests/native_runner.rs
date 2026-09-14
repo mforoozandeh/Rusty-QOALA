@@ -9,6 +9,7 @@
 use std::time::{Duration, Instant};
 
 use qoala_gui::presets;
+use qoala_gui::problem::Problem;
 use qoala_gui::run::RunMessage;
 use qoala_gui::runner::Runner;
 
@@ -35,7 +36,7 @@ fn drain_until_done(runner: &mut Runner, limit: Duration) -> Vec<RunMessage> {
 fn a_run_happens_off_the_calling_thread_and_reports_back() {
     let mut setup = presets::default_setup();
     setup.max_iter = 10;
-    let mut runner = Runner::start(setup);
+    let mut runner = Runner::start(Problem::Qoala(setup));
 
     let messages = drain_until_done(&mut runner, Duration::from_secs(60));
     let progress = messages
@@ -63,7 +64,7 @@ fn a_run_happens_off_the_calling_thread_and_reports_back() {
 fn cancelling_stops_the_run_and_keeps_the_waveform() {
     let mut setup = presets::swap_3spin_1();
     setup.max_iter = 5000;
-    let mut runner = Runner::start(setup);
+    let mut runner = Runner::start(Problem::Qoala(setup));
 
     // Let it get going, then ask it to stop.
     let started = Instant::now();

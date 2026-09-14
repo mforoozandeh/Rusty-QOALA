@@ -1,24 +1,24 @@
 //! Waveform amplitudes in physical units.
 //!
-//! The optimiser works in dimensionless amplitudes in `[-1, 1]`; everything a
-//! person sees - the plot, the CSV - is in Hz against
-//! seconds.  The conversion needs the setup that produced the waveform, which
-//! is the whole reason [`crate::app`] keeps the two together.
+//! The optimisers work in dimensionless amplitudes; everything a person
+//! sees, the plot and the CSV, is in Hz against seconds.  The conversion
+//! needs the problem that produced the waveform, which is the whole reason
+//! [`crate::app`] keeps the two together.
 
-use crate::setup::Setup;
+use crate::problem::Problem;
 
 /// Stair points for one channel: `[time in ms, amplitude in Hz]`, two per
 /// slice so the trace is flat across each one.
-pub fn stairs(setup: &Setup, waveform: &[Vec<f64>], channel: usize) -> Vec<[f64; 2]> {
+pub fn stairs(problem: &Problem, waveform: &[Vec<f64>], channel: usize) -> Vec<[f64; 2]> {
     let two_pi = 2.0 * std::f64::consts::PI;
-    let amps = setup.channel_amplitudes_rad_per_s();
-    let dt = setup.dt();
+    let amps = problem.channel_amplitudes_rad_per_s();
+    let dt = problem.dt();
     let scale = amps.get(channel).copied().unwrap_or(two_pi) / two_pi;
 
     // Slices are uniform, so a missing one can fall back to the nominal
     // width.  This should never fire - the interface keeps a result with the
-    // setup that produced it - but a plot is not worth a panic.
-    let nominal = setup.duration_s / setup.nslices.max(1) as f64;
+    // problem that produced it - but a plot is not worth a panic.
+    let nominal = problem.duration_s() / problem.nslices().max(1) as f64;
 
     let mut points = Vec::with_capacity(2 * waveform.len());
     let mut t = 0.0;
@@ -44,7 +44,8 @@ mod tests {
     fn stairs_are_flat_across_each_slice_and_scaled_to_hz() {
         let setup = presets::z2z_2spin_1();
         let waveform = flat(setup.nslices, setup.nchannels());
-        let points = stairs(&setup, &waveform, 0);
+        let problem = Problem::Qoala(setup.clone());
+        let points = stairs(&problem, &waveform, 0);
 
         assert_eq!(points.len(), 2 * setup.nslices);
         // Half amplitude of a 1000 Hz channel.
@@ -55,6 +56,18 @@ mod tests {
         assert!((last - setup.duration_s * 1e3).abs() < 1e-9, "{last}");
     }
 
+    #[test]
+    fn escalade_stairs_are_scaled_by_the_nominal_field() {
+        let setup = presets::escalade_b1_compensated();
+        let waveform = flat(setup.nslices, 2);
+        let points = stairs(&Problem::Escalade(setup.clone()), &waveform, 1);
+        assert!(points
+            .iter()
+            .all(|p| (p[1] - 0.5 * setup.rf_hz).abs() < 1e-9));
+        let last = points.last().unwrap()[0];
+        assert!((last - setup.duration_s * 1e3).abs() < 1e-9);
+    }
+
     /// Editing the setup after a run must not be able to take the plot down
     /// with it.  This is what panicked: `time slices` dragged to its minimum
     /// of 2 while a fifty-slice result was on screen.
@@ -63,7 +76,7 @@ mod tests {
         let mut setup = presets::z2z_2spin_1();
         let waveform = flat(setup.nslices, setup.nchannels());
         setup.nslices = 2;
-        let points = stairs(&setup, &waveform, 0);
+        let points = stairs(&Problem::Qoala(setup), &waveform, 0);
         assert_eq!(points.len(), 2 * waveform.len());
     }
 
@@ -74,7 +87,7 @@ mod tests {
         let waveform = flat(setup.nslices, setup.nchannels());
         setup.npairs = 1;
         setup.resize();
-        let points = stairs(&setup, &waveform, 3);
+        let points = stairs(&Problem::Qoala(setup), &waveform, 3);
         assert_eq!(points.len(), 2 * waveform.len());
     }
 }

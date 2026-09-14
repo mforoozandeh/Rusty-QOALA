@@ -19,8 +19,8 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
+use crate::problem::Problem;
 use crate::run::RunMessage;
-use crate::setup::Setup;
 
 /// A run in progress.
 pub struct Runner {
@@ -33,16 +33,16 @@ pub struct Runner {
 }
 
 /// The worker's own WebAssembly has to load before it can listen, and a
-/// message posted before then is dropped rather than queued.  So the setup
+/// message posted before then is dropped rather than queued.  So the problem
 /// waits here until the worker says it is ready.
 type Pending = Rc<RefCell<Option<String>>>;
 
 impl Runner {
-    /// Start `setup` in a fresh worker.
-    pub fn start(setup: Setup) -> Self {
+    /// Start `problem` in a fresh worker.
+    pub fn start(problem: Problem) -> Self {
         let inbox: Rc<RefCell<Vec<RunMessage>>> = Rc::new(RefCell::new(Vec::new()));
 
-        let pending: Pending = Rc::new(RefCell::new(serde_json::to_string(&setup).ok()));
+        let pending: Pending = Rc::new(RefCell::new(serde_json::to_string(&problem).ok()));
         if pending.borrow().is_none() {
             inbox
                 .borrow_mut()

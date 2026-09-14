@@ -121,6 +121,72 @@ explicitly rather than pretending.
   self-consistent reading. The default `'gain'` method, used by every example,
   is unaffected.
 
+## ESCALADE
+
+`src/escalade/` ports the ESCALADE MATLAB code (M. Foroozandeh, P. Singh).
+The objective, gradient and Hessian are the MATLAB's, term for term; the
+Hessian is checked against finite differences of the gradient. What differs
+is the optimiser around them.
+
+### The optimiser
+
+`ESCALADE.m` calls `fmincon`: `trust-region-reflective` with the analytic
+Hessian, the default algorithm without. `fmincon` is not portable, so
+`escalade/solve.rs` uses [argmin](https://argmin-rs.org) instead: a Newton
+trust region with a Steihaug-CG subproblem on the Hessian, and L-BFGS with a
+More-Thuente line search on the gradient alone. The iterate sequence therefore
+differs from the MATLAB's; the problem being solved does not, apart from the
+amplitude limit below.
+
+### The amplitude limit
+
+`fmincon` is given box bounds of `[-1, 1]` on each quadrature, which lets a
+pulse point reach `sqrt(2)` times the nominal field in the corners of the box.
+The physical limit is on the field itself, so the port limits
+`sqrt(x^2 + y^2) <= 1` instead. argmin's gradient solvers take no bounds, so
+the limit is the `SNSA` spillout penalty from `penalty.rs`: zero anywhere
+inside the unit circle, quadratic outside it, weight 100 by default
+(`Escalade::amplitude_weight`). A penalty is soft - a run that stops at its
+target fidelity can sit a percent or two above the limit - so every result
+reports its `max_amplitude`.
+
+### Stopping
+
+The MATLAB's `OutputFcn` stops once the fidelity passes `targetfidelity`. Here
+the run stops once the fidelity less the penalty does, so that an
+out-of-bounds pulse cannot stop early. `fmincon`'s `OptimalityTolerance` and
+`FunctionTolerance` of `1e-10` become a gradient-norm test and L-BFGS's cost
+test, and a run that has not lowered the objective in 30 iterations stops as
+stalled (`ExitFlag::StepTolerance`).
+
+### Smaller changes
+
+- **No finite-difference mode.** `usegrad = false` asks `fmincon` to
+  difference the objective itself. The analytic gradient is always used.
+- **No `parfor`.** The loop over fields is sequential: each spin is a handful
+  of 2x2 products per slice, and `wasm32` has no threads.
+- **One objective, not two.** `gradhess_vectorized.m` is
+  `gradhess_vectorized_B1_parallel.m` with a single unit-weight field, so only
+  the latter is ported.
+- **Zero field.** The MATLAB adds `eps` to every offset to keep `|s|` off
+  zero, but the derivative coefficients still lose every digit to
+  cancellation as `|s|` shrinks. The port drops the shift and switches to
+  their Taylor series below `|s| = 0.1`.
+- **Units and signs.** Explicit offsets (`Om`) are given in Hz rather than
+  rad/s, and the target fidelity and reported fidelity are positive:
+  `targetfidelity = -0.99` is `target_fidelity: 0.99`.
+- **Weights are checked.** `readSettings` silently replaces `rfweights` of the
+  wrong length with equal weights; the port refuses them.
+- **Visualisation.** `escalade::profile` computes what
+  `ESCALADE_pulse_sim.m` and `ESCALADE_Bloch_B1.m` plot, over the same grids,
+  but propagates with the optimiser's own SU(2) propagators rather than the
+  scripts' separate rotation-matrix Bloch simulation and its phase
+  convention. The Bruker shape export, the rf-coefficient optimisation of
+  `ESCALADE_dphidB1_opt.m` and the Bloch-sphere trajectories are not ported.
+- **Start.** `test_escalade_visual.m` starts from a flat pulse at -0.5; the
+  `escalade_b1` example does too. The application's presets use a seeded
+  random start, which reaches the target far sooner under the amplitude limit.
+
 ## Deliberate design changes
 
 These do not change any number, only how the code is shaped.

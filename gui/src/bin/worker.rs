@@ -1,15 +1,18 @@
 //! The optimisation worker.
 //!
 //! Trunk builds this as a second WebAssembly binary and the page starts it as
-//! a Web Worker.  It receives a JSON [`Setup`] by `postMessage`, runs the
+//! a Web Worker.  It receives a JSON [`Problem`] by `postMessage`, runs the
 //! optimisation, and posts a JSON [`RunMessage`] back for every iteration and
 //! once more at the end.
 //!
 //! It never cancels itself: the page terminates the worker instead, because a
 //! worker blocked inside the optimiser cannot read its own message queue.
+//!
+//! [`Problem`]: qoala_gui::problem::Problem
+//! [`RunMessage`]: qoala_gui::run::RunMessage
 
 #[cfg(target_arch = "wasm32")]
-use qoala_gui::{run, setup};
+use qoala_gui::{problem, run};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -38,18 +41,18 @@ fn main() {
 
             let Some(text) = event.data().as_string() else {
                 reply(&run::RunMessage::Failed(
-                    "the worker was sent something that was not a setup".into(),
+                    "the worker was sent something that was not a problem".into(),
                 ));
                 return;
             };
-            match serde_json::from_str::<setup::Setup>(&text) {
-                Ok(problem) => {
+            match problem::Problem::from_json(&text) {
+                Some(problem) => {
                     let mut sink = PostSink {
                         scope: handler_scope.clone(),
                     };
                     run::run_to_sink(&problem, &mut sink);
                 }
-                Err(e) => reply(&run::RunMessage::Failed(format!("unreadable setup: {e}"))),
+                None => reply(&run::RunMessage::Failed("unreadable problem".into())),
             }
         });
 
@@ -57,7 +60,7 @@ fn main() {
     // The closure has to outlive `main`, which returns immediately.
     on_message.forget();
 
-    // Only now is it safe to be sent a setup: anything posted before this
+    // Only now is it safe to be sent a problem: anything posted before this
     // point would have been dispatched with no handler installed and lost.
     if let Ok(json) = serde_json::to_string(&run::RunMessage::Ready) {
         let _ = scope.post_message(&JsValue::from_str(&json));

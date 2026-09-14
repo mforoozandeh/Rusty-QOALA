@@ -4,6 +4,7 @@
 
 use qoala_gui::estimate::estimate_seconds;
 use qoala_gui::presets;
+use qoala_gui::problem::Problem;
 use qoala_gui::run::{run_to_sink, MessageSink, RunMessage};
 
 struct Quiet;
@@ -11,21 +12,35 @@ impl MessageSink for Quiet {
     fn send(&mut self, _m: RunMessage) {}
 }
 
+const ITERATIONS: usize = 20;
+
 fn main() {
     println!(
         "{:<40} {:>8} {:>10} {:>10} {:>8}",
         "preset", "iters", "measured", "estimate", "ratio"
     );
-    for mut setup in presets::all() {
-        setup.max_iter = 20;
+    for problem in presets::every() {
+        // Every run gets the same budget, and ESCALADE is kept from stopping
+        // at its target so that the budget is what is measured.
+        let problem = match problem {
+            Problem::Qoala(mut s) => {
+                s.max_iter = ITERATIONS;
+                Problem::Qoala(s)
+            }
+            Problem::Escalade(mut s) => {
+                s.max_iter = ITERATIONS;
+                s.target_fidelity = 1.0;
+                Problem::Escalade(s)
+            }
+        };
         let started = std::time::Instant::now();
-        run_to_sink(&setup, &mut Quiet);
+        run_to_sink(&problem, &mut Quiet);
         let measured = started.elapsed().as_secs_f64();
-        let estimate = estimate_seconds(&setup);
+        let estimate = estimate_seconds(&problem);
         println!(
             "{:<40} {:>8} {:>9.3}s {:>9.3}s {:>8.2}",
-            setup.name,
-            setup.max_iter,
+            problem.name(),
+            ITERATIONS,
             measured,
             estimate,
             estimate / measured
@@ -33,11 +48,11 @@ fn main() {
     }
 
     println!("\nshare links");
-    for setup in presets::all() {
+    for problem in presets::every() {
         println!(
             "{:<40} #{}",
-            setup.name,
-            qoala_gui::platform::fragment_for_setup(&setup).expect("fragment")
+            problem.name(),
+            qoala_gui::platform::fragment_for_problem(&problem).expect("fragment")
         );
     }
 }

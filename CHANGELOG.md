@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **ESCALADE**, in `escalade`: a port of the ESCALADE MATLAB code (M.
+  Foroozandeh, P. Singh) for broadband single-spin pulses. `escalade::escalade`
+  and `escalade_with_progress` optimise one x/y pulse across a band of offsets
+  and, optionally, a spread of field strengths, with the analytic gradient and
+  Hessian of `gradhess_vectorized_B1_parallel.m`. Progress goes to the same
+  `optim::ProgressSink` as QOALA's. `escalade::profile` gives a pulse's
+  excitation profile, its map of Iy over offset and field, and its phase
+  sensitivity to the field.
+- **Examples** `escalade_grad_vs_hess` and `escalade_b1`, porting the MATLAB's
+  two `test_runs/` scripts.
+- **The application runs ESCALADE.** An algorithm switch, ESCALADE presets
+  and editor, and a choice of waveform, offset profile or B1-robustness view
+  for the result. Links, stored sessions and exported setups from earlier
+  versions still load.
+
+### Changed
+
+- New dependencies `argmin` and `argmin-math`, which supply ESCALADE's
+  optimiser in place of MATLAB's `fmincon`.
+- ESCALADE limits the field amplitude, `sqrt(x^2 + y^2)`, with a penalty,
+  where the MATLAB bounds each quadrature. See `DEVIATIONS.md`.
+
 ## [1.1.0]
 
 ### Added

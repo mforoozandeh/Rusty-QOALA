@@ -3,19 +3,19 @@
 
 use std::fmt::Write as _;
 
-use crate::setup::Setup;
+use crate::problem::Problem;
 
 /// Waveform as CSV: a time column then one column per control channel, in Hz.
 ///
 /// The same layout `qoala::examples_io::write_waveform_csv` writes, so the
 /// two are interchangeable.
-pub fn waveform_csv(setup: &Setup, waveform: &[Vec<f64>]) -> String {
+pub fn waveform_csv(problem: &Problem, waveform: &[Vec<f64>]) -> String {
     let two_pi = 2.0 * std::f64::consts::PI;
-    let amps = setup.channel_amplitudes_rad_per_s();
-    let dt = setup.dt();
+    let amps = problem.channel_amplitudes_rad_per_s();
+    let dt = problem.dt();
 
     let mut out = String::from("time_s");
-    for name in setup.channel_names() {
+    for name in problem.channel_names() {
         let _ = write!(out, ",{name}");
     }
     out.push('\n');
@@ -75,11 +75,11 @@ mod tests {
     use super::*;
     use crate::presets;
 
-    fn ramp(setup: &Setup) -> Vec<Vec<f64>> {
-        (0..setup.nslices)
+    fn ramp(nslices: usize, nchannels: usize) -> Vec<Vec<f64>> {
+        (0..nslices)
             .map(|n| {
-                let t = n as f64 / setup.nslices as f64;
-                (0..setup.nchannels())
+                let t = n as f64 / nslices as f64;
+                (0..nchannels)
                     .map(|k| 0.5 * ((3.0 + k as f64) * t).sin())
                     .collect()
             })
@@ -89,7 +89,8 @@ mod tests {
     #[test]
     fn the_csv_has_a_header_and_one_row_per_slice() {
         let setup = presets::z2z_2spin_1();
-        let csv = waveform_csv(&setup, &ramp(&setup));
+        let problem = Problem::Qoala(setup.clone());
+        let csv = waveform_csv(&problem, &ramp(setup.nslices, setup.nchannels()));
         let lines: Vec<&str> = csv.trim_end().lines().collect();
         assert_eq!(lines.len(), setup.nslices + 1);
         assert_eq!(
@@ -109,5 +110,18 @@ mod tests {
             .unwrap();
         let dt = setup.duration_s / setup.nslices as f64;
         assert!((last_t - dt * (setup.nslices - 1) as f64).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_escalade_csv_has_x_and_y_in_hz() {
+        let setup = presets::escalade_b1_sensitive();
+        let csv = waveform_csv(
+            &Problem::Escalade(setup.clone()),
+            &vec![vec![1.0, -0.5]; setup.nslices],
+        );
+        let lines: Vec<&str> = csv.trim_end().lines().collect();
+        assert_eq!(lines[0], "time_s,x,y");
+        assert_eq!(lines.len(), setup.nslices + 1);
+        assert!(lines[1].ends_with(",17000.000000000,-8500.000000000"));
     }
 }
