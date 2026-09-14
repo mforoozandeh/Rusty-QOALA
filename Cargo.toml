@@ -2,7 +2,7 @@
 name = "qoala"
 version = "1.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.87"
 description = "Quantum Optimal control by Adaptive Low-cost Algorithm: GRAPE pulse optimisation for coupled two-level systems, with adaptive operator splitting"
 license = "MIT"
 authors = ["Mohammadali Foroozandeh"]

@@ -2,9 +2,9 @@
 name = "qoala-gui"
 version = "1.1.0"
 edition = "2021"
-# eframe and its graphics stack move faster than the library does; the GUI
-# carries its own, higher, minimum.
-rust-version = "1.85"
+# Can be no lower than the library's; eframe and its graphics stack may push
+# it higher on their own.
+rust-version = "1.87"
 description = "Browser and desktop front end for the QOALA pulse optimiser"
 license = "MIT"
 authors = ["Mohammadali Foroozandeh"]

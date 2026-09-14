@@ -27,6 +27,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - New dependencies `argmin` and `argmin-math`, which supply ESCALADE's
   optimiser in place of MATLAB's `fmincon`.
+- **Minimum supported Rust version is now 1.87** (was 1.82), because argmin
+  0.11 uses `is_multiple_of`, stabilised in 1.87. The application's minimum
+  rises from 1.85 to match.
 - ESCALADE limits the field amplitude, `sqrt(x^2 + y^2)`, with a penalty,
   where the MATLAB bounds each quadrature. See `DEVIATIONS.md`.
 
