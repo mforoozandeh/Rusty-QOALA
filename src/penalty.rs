@@ -170,7 +170,7 @@ pub fn penalty(
         Penalty::Snsa => {
             // Spillout on the polar amplitude of each (x, y) channel pair, so
             // the constraint is on pulse power rather than on each quadrature.
-            if nchan % 2 != 0 {
+            if !nchan.is_multiple_of(2) {
                 return Err(QoalaError::BadValue(
                     "the SNSA penalty needs an even number of control channels (x/y pairs)".into(),
                 ));
@@ -539,7 +539,7 @@ mod tests {
     fn smoothing_penalty_prefers_smooth_waveforms() {
         let n = 20;
         let smooth = DMatrix::from_fn(n, 1, |i, _| (i as f64 / n as f64).sin());
-        let rough = DMatrix::from_fn(n, 1, |i, _| if i % 2 == 0 { 1.0 } else { -1.0 });
+        let rough = DMatrix::from_fn(n, 1, |i, _| if i.is_multiple_of(2) { 1.0 } else { -1.0 });
         let ctx = PenaltyContext::new();
         let (lo, hi) = (Bound::Scalar(-1.0), Bound::Scalar(1.0));
         let s = penalty(

@@ -491,7 +491,7 @@ pub fn pair_count(cartops: &[Vec<Option<CMat>>]) -> Result<usize> {
     let row = cartops
         .first()
         .ok_or_else(|| QoalaError::MissingField("cartops".into()))?;
-    if row.len() % 3 != 0 {
+    if !row.len().is_multiple_of(3) {
         return Err(QoalaError::Dimension(
             "cartops needs three columns (x, y, z) per control pair".into(),
         ));

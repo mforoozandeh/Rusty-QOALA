@@ -168,7 +168,7 @@ pub fn rodrigues_with_derivatives(
         return Err(QoalaError::BadValue("no control operators supplied".into()));
     }
     let ncols = rot_ops[0].len();
-    if ncols % 3 != 0 {
+    if !ncols.is_multiple_of(3) {
         return Err(QoalaError::Dimension(
             "control operator array must have 3 columns (x, y, z) per control pair".into(),
         ));
@@ -176,7 +176,7 @@ pub fn rodrigues_with_derivatives(
     let npairs = ncols / 3;
     let kctrls = 2 * npairs;
     let m = dt.len();
-    if m % nspins != 0 {
+    if !m.is_multiple_of(nspins) {
         return Err(QoalaError::Dimension(format!(
             "time-point count {m} is not a multiple of the spin count {nspins}"
         )));
