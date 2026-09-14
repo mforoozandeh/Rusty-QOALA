@@ -25,8 +25,11 @@ use crate::linalg::CMat;
 use crate::propagate::propagator;
 use crate::types::PropMethod;
 use num_complex::Complex64;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 /// Splitting constants and the interleaving order for one `(order, trotter)`
@@ -291,6 +294,10 @@ impl SplitSet {
 
     /// Build a set, reusing a cached copy of the interaction propagators when
     /// one exists.  This is the `prop_cache = 'store'` path.
+    ///
+    /// Native only: `wasm32` has no filesystem, and
+    /// [`crate::types::PropCache::Store`] is rejected there.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn build_cached(
         order: usize,
         trotter: usize,
@@ -340,9 +347,11 @@ impl SplitSet {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const CACHE_MAGIC: &[u8; 8] = b"QOALAP01";
 
 /// Write interaction propagators to the scratch cache.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write_propagator_cache(path: &Path, props: &[Option<CMat>]) -> Result<()> {
     let mut f = fs::File::create(path)?;
     f.write_all(CACHE_MAGIC)?;
@@ -371,6 +380,7 @@ pub fn write_propagator_cache(path: &Path, props: &[Option<CMat>]) -> Result<()>
 }
 
 /// Read interaction propagators back from the scratch cache.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_propagator_cache(path: &Path) -> Result<Vec<Option<CMat>>> {
     let mut f = fs::File::open(path)?;
     let mut magic = [0u8; 8];
@@ -569,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn propagator_cache_round_trips() {
         let dir = std::env::temp_dir().join("qoala_split_cache_test");
         let _ = fs::create_dir_all(&dir);

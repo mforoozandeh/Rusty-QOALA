@@ -6,11 +6,12 @@
 //! the Newton step uses the negated Hessian.
 
 use super::linesearch::fmaxlinesearch;
+use super::progress::{IterationReport, NoProgress, ProgressSink};
 use super::{objective, to_vector, CostFunction, ObjectiveRequest, OptData};
 use crate::config::ControlSystem;
 use crate::error::Result;
 use crate::linalg::{cond_2_symmetric, is_positive_definite};
-use crate::report::{fmt_e, int2str, pad};
+use crate::report::{fmt_e, int2str, pad, Reporter};
 use crate::types::{ExitFlag, OptMethod};
 use nalgebra::{DMatrix, DVector};
 
@@ -26,33 +27,57 @@ pub struct Optimisation {
 }
 
 /// Maximise `cost` over the waveform, starting from `guess`.
+///
+/// Equivalent to [`fmaxnewton_with_progress`] with a sink that ignores every
+/// report and never cancels.
 pub fn fmaxnewton(
     sys: &mut ControlSystem,
     cost: &dyn CostFunction,
     guess: &DMatrix<f64>,
+) -> Result<Optimisation> {
+    fmaxnewton_with_progress(sys, cost, guess, &mut NoProgress)
+}
+
+/// Maximise `cost` over the waveform, reporting each iteration to `progress`
+/// and stopping early when it asks to.
+///
+/// The console table is unaffected: it is itself a [`ProgressSink`] driven
+/// from the same rows, so `progress` sees exactly what the table prints.
+///
+/// The sink is a parameter rather than a field of [`ControlSystem`] because
+/// that struct is `Clone` and a boxed trait object is not.
+pub fn fmaxnewton_with_progress(
+    sys: &mut ControlSystem,
+    cost: &dyn CostFunction,
+    guess: &DMatrix<f64>,
+    progress: &mut dyn ProgressSink,
 ) -> Result<Optimisation> {
     if guess.iter().all(|v| *v == 0.0) {
         sys.output
             .line("[ fmaxnewton                                        ]  WARNING: bad things happen when the initial guess is zeros.");
     }
 
-    let report = ReportLayout::for_system(sys);
+    let mut table = TableSink::for_system(sys);
     let npen = sys.penalties.len();
     let mut data = OptData::new(sys.max_iter, npen, (guess.nrows(), guess.ncols()));
     let mut x = to_vector(guess);
 
-    header(sys, &report);
-    let wall = std::time::Instant::now();
+    table.header();
+    let wall = crate::time::Instant::now();
 
     let mut exitflag = ExitFlag::MaxIterations;
     let mut last_iteration = 0usize;
+    let mut cancelled = false;
 
     if sys.max_iter == 0 {
         data.timer[(0, 0)] = 0.0;
         let eval = objective(&x, cost, &mut data, sys, ObjectiveRequest::Value)?;
         store_row(&mut data, 0, 0);
         data.timer[(0, 1)] = wall.elapsed().as_secs_f64();
-        itrep(sys, &report, &data, eval.fx, None, None);
+        let elapsed = wall.elapsed().as_secs_f64();
+        emit_iteration(
+            &mut table, progress, sys, &data, eval.fx, None, None, elapsed,
+        );
     } else {
         // LBFGS history, newest first.
         let mut dx_hist: Vec<DVector<f64>> = Vec::new();
@@ -63,6 +88,11 @@ pub fn fmaxnewton(
         let mut fx = f64::NEG_INFINITY;
 
         for n in 1..=sys.max_iter {
+            if progress.should_cancel() {
+                exitflag = ExitFlag::Cancelled;
+                cancelled = true;
+                break;
+            }
             last_iteration = n;
             if n == 1 {
                 data.timer[(0, 0)] = 0.0;
@@ -80,7 +110,17 @@ pub fn fmaxnewton(
                         data.timer[(0, 1)] = wall.elapsed().as_secs_f64();
                         old_x = x.clone();
                         old_g = g.clone();
-                        itrep(sys, &report, &data, fx, Some(&g), None);
+                        let elapsed = wall.elapsed().as_secs_f64();
+                        emit_iteration(
+                            &mut table,
+                            progress,
+                            sys,
+                            &data,
+                            fx,
+                            Some(&g),
+                            None,
+                            elapsed,
+                        );
                         data.timer[(1, 0)] = 1.0;
                         g.clone()
                     } else {
@@ -101,7 +141,17 @@ pub fn fmaxnewton(
                     if n == 1 {
                         store_row(&mut data, 0, 0);
                         data.timer[(0, 1)] = wall.elapsed().as_secs_f64();
-                        itrep(sys, &report, &data, fx, Some(&g), None);
+                        let elapsed = wall.elapsed().as_secs_f64();
+                        emit_iteration(
+                            &mut table,
+                            progress,
+                            sys,
+                            &data,
+                            fx,
+                            Some(&g),
+                            None,
+                            elapsed,
+                        );
                         data.timer[(1, 0)] = 1.0;
                     }
                     // Symmetrise, then regularise the negated Hessian so the
@@ -126,7 +176,17 @@ pub fn fmaxnewton(
             if let Some(gr) = ls.grad.clone() {
                 g = gr;
             }
-            itrep(sys, &report, &data, fx, ls.grad.as_ref(), alpha);
+            let elapsed = wall.elapsed().as_secs_f64();
+            emit_iteration(
+                &mut table,
+                progress,
+                sys,
+                &data,
+                fx,
+                ls.grad.as_ref(),
+                alpha,
+                elapsed,
+            );
 
             let Some(alpha) = alpha else {
                 // No acceptable point: keep the current waveform and stop.
@@ -150,7 +210,9 @@ pub fn fmaxnewton(
         }
     }
 
-    if last_iteration == sys.max_iter {
+    // A cancelled run keeps its own exit reason even if it happened to be
+    // asked to stop on the last permitted iteration.
+    if !cancelled && last_iteration == sys.max_iter {
         exitflag = ExitFlag::MaxIterations;
     }
 
@@ -159,7 +221,7 @@ pub fn fmaxnewton(
         OptMethod::NewtonRaphson => "Newton-Raphson method".into(),
         OptMethod::GaussNewton => "Gauss-Newton method".into(),
     };
-    footer(sys, &report, &data, exitflag);
+    table.footer(&data, exitflag);
 
     let waveform = super::to_waveform(&x, data.x_shape);
     Ok(Optimisation {
@@ -320,113 +382,162 @@ impl ReportLayout {
     }
 }
 
-fn emit(sys: &ControlSystem, text: &str) {
-    let prefix = format!("fmaxnewton@{}", sys.optimcon_fun);
-    sys.output
-        .line(&format!("[ {} ]  {}", pad(&prefix, 50), text));
-}
-
-fn header(sys: &ControlSystem, r: &ReportLayout) {
-    emit(sys, &r.rule('='));
-    emit(sys, &r.columns());
-    emit(sys, &r.rule('-'));
-}
-
-fn footer(sys: &ControlSystem, r: &ReportLayout, data: &OptData, exitflag: ExitFlag) {
-    emit(sys, &r.rule('-'));
-    emit(sys, &format!("    Algorithm Used     : {}", data.algorithm));
-    emit(
-        sys,
-        &format!("    Exit message       : {}", exitflag.message()),
-    );
-    emit(
-        sys,
-        &format!(
-            "    Iterations         : {}",
-            int2str(data.count.iter as i64)
-        ),
-    );
-    emit(
-        sys,
-        &format!("    Function Count     : {}", int2str(data.count.fx as i64)),
-    );
-    emit(
-        sys,
-        &format!(
-            "    Gradient Count     : {}",
-            int2str(data.count.gfx as i64)
-        ),
-    );
-    emit(
-        sys,
-        &format!(
-            "    Hessian Count      : {}",
-            int2str(data.count.hfx as i64)
-        ),
-    );
-    emit(sys, &r.rule('='));
-}
-
-fn itrep(
+/// Build the structured row for the current optimiser state.
+fn make_report(
     sys: &ControlSystem,
-    r: &ReportLayout,
     data: &OptData,
     fx: f64,
     grad: Option<&DVector<f64>>,
     alpha: Option<f64>,
+    elapsed_s: f64,
+) -> IterationReport {
+    // The adaptive step keeps the current splitting parameters on the drift
+    // system; without adaptivity they are whatever the parser resolved.
+    let (trotter_number, split_order) = sys
+        .drift_sys
+        .first()
+        .map(|d| (d.trotter_number, d.split_order))
+        .unwrap_or((1, 2));
+
+    IterationReport {
+        iteration: data.count.iter,
+        fidelity: data.fx_sep_pen[0],
+        penalty: -data.fx_sep_pen[1..].iter().sum::<f64>(),
+        total: fx,
+        fidelity_check: data.fx_chk,
+        gradient_norm: grad.map(|g| g.norm()).unwrap_or(0.0),
+        alpha,
+        split_order,
+        trotter_number,
+        elapsed_s,
+        counters: data.count,
+    }
+}
+
+/// Build one row and hand it to the console table and the caller's sink.
+#[allow(clippy::too_many_arguments)]
+fn emit_iteration(
+    table: &mut TableSink,
+    progress: &mut dyn ProgressSink,
+    sys: &ControlSystem,
+    data: &OptData,
+    fx: f64,
+    grad: Option<&DVector<f64>>,
+    alpha: Option<f64>,
+    elapsed_s: f64,
 ) {
-    let fid = data.fx_sep_pen[0];
-    let pens: f64 = -data.fx_sep_pen[1..].iter().sum::<f64>();
-    let chk = data.fx_chk;
+    let report = make_report(sys, data, fx, grad, alpha, elapsed_s);
+    table.on_iteration(&report);
+    progress.on_iteration(&report);
+}
 
-    let mut row = String::new();
-    row.push_str(&pad(&int2str(data.count.iter as i64), 6));
-    row.push_str(&pad(&int2str(data.count.fx as i64), 5));
-    row.push_str(&pad(&int2str(data.count.gfx as i64), 5));
-    row.push_str(&pad(&int2str(data.count.hfx as i64), 5));
-    row.push_str(&pad(&int2str(data.count.rfo as i64), 5));
-    if r.adaptive {
-        let (q, p) = sys
-            .drift_sys
-            .first()
-            .map(|d| (d.trotter_number, d.split_order))
-            .unwrap_or((1, 2));
-        row.push_str(&pad(&int2str(q as i64), 5));
-        row.push_str(&pad(&int2str(p as i64), 5));
-    }
+/// The MATLAB iteration table, as one [`ProgressSink`] among others.
+///
+/// It owns everything it needs to format a row, so the optimiser drives it
+/// through the same interface as any caller-supplied sink.
+pub struct TableSink {
+    output: Reporter,
+    prefix: String,
+    layout: ReportLayout,
+}
 
-    row.push_str(&pad(&format!("{fid:+.8}"), 11));
-    match (r.check, r.penalties) {
-        (true, true) => {
-            row.push_str("  ");
-            row.push_str(&pad(&format!("({chk:+11.8})"), 11));
-            row.push_str("  ");
-            row.push_str(&pad(&format!("{pens:+.6}"), 11));
-            row.push_str("   ");
-            row.push_str(&pad(&format!("{fx:+.6}"), 11));
-            row.push_str("  ");
-        }
-        (false, false) => row.push_str("    "),
-        (false, true) => {
-            row.push_str("   ");
-            row.push_str(&pad(&format!("{pens:+.6}"), 11));
-            row.push_str("   ");
-            row.push_str(&pad(&format!("{fx:+.6}"), 11));
-            row.push_str("  ");
-        }
-        (true, false) => {
-            row.push_str("   ");
-            row.push_str(&pad(&format!("({chk:+11.8})"), 11));
-            row.push_str("    ");
+impl TableSink {
+    /// A table laid out for this control system, writing to its reporter.
+    pub fn for_system(sys: &ControlSystem) -> Self {
+        TableSink {
+            output: sys.output.clone(),
+            prefix: format!("fmaxnewton@{}", sys.optimcon_fun),
+            layout: ReportLayout::for_system(sys),
         }
     }
 
-    row.push_str(&pad(&alpha.map(|a| fmt_e(a, 2)).unwrap_or_default(), 9));
-    row.push_str("  ");
-    let gnorm = grad.map(|g| g.norm()).unwrap_or(0.0);
-    row.push_str(&pad(&fmt_e(gnorm, 4), 10));
+    fn emit(&self, text: &str) {
+        self.output
+            .line(&format!("[ {} ]  {}", pad(&self.prefix, 50), text));
+    }
 
-    emit(sys, &row);
+    /// The rule-columns-rule banner above the table.
+    pub fn header(&self) {
+        self.emit(&self.layout.rule('='));
+        self.emit(&self.layout.columns());
+        self.emit(&self.layout.rule('-'));
+    }
+
+    /// The summary block below the table.
+    pub fn footer(&self, data: &OptData, exitflag: ExitFlag) {
+        let r = &self.layout;
+        self.emit(&r.rule('-'));
+        self.emit(&format!("    Algorithm Used     : {}", data.algorithm));
+        self.emit(&format!("    Exit message       : {}", exitflag.message()));
+        self.emit(&format!(
+            "    Iterations         : {}",
+            int2str(data.count.iter as i64)
+        ));
+        self.emit(&format!(
+            "    Function Count     : {}",
+            int2str(data.count.fx as i64)
+        ));
+        self.emit(&format!(
+            "    Gradient Count     : {}",
+            int2str(data.count.gfx as i64)
+        ));
+        self.emit(&format!(
+            "    Hessian Count      : {}",
+            int2str(data.count.hfx as i64)
+        ));
+        self.emit(&r.rule('='));
+    }
+}
+
+impl ProgressSink for TableSink {
+    fn on_iteration(&mut self, rep: &IterationReport) {
+        let r = &self.layout;
+        let (fid, pens, chk, fx) = (rep.fidelity, rep.penalty, rep.fidelity_check, rep.total);
+        let c = &rep.counters;
+
+        let mut row = String::new();
+        row.push_str(&pad(&int2str(c.iter as i64), 6));
+        row.push_str(&pad(&int2str(c.fx as i64), 5));
+        row.push_str(&pad(&int2str(c.gfx as i64), 5));
+        row.push_str(&pad(&int2str(c.hfx as i64), 5));
+        row.push_str(&pad(&int2str(c.rfo as i64), 5));
+        if r.adaptive {
+            row.push_str(&pad(&int2str(rep.trotter_number as i64), 5));
+            row.push_str(&pad(&int2str(rep.split_order as i64), 5));
+        }
+
+        row.push_str(&pad(&format!("{fid:+.8}"), 11));
+        match (r.check, r.penalties) {
+            (true, true) => {
+                row.push_str("  ");
+                row.push_str(&pad(&format!("({chk:+11.8})"), 11));
+                row.push_str("  ");
+                row.push_str(&pad(&format!("{pens:+.6}"), 11));
+                row.push_str("   ");
+                row.push_str(&pad(&format!("{fx:+.6}"), 11));
+                row.push_str("  ");
+            }
+            (false, false) => row.push_str("    "),
+            (false, true) => {
+                row.push_str("   ");
+                row.push_str(&pad(&format!("{pens:+.6}"), 11));
+                row.push_str("   ");
+                row.push_str(&pad(&format!("{fx:+.6}"), 11));
+                row.push_str("  ");
+            }
+            (true, false) => {
+                row.push_str("   ");
+                row.push_str(&pad(&format!("({chk:+11.8})"), 11));
+                row.push_str("    ");
+            }
+        }
+
+        row.push_str(&pad(&rep.alpha.map(|a| fmt_e(a, 2)).unwrap_or_default(), 9));
+        row.push_str("  ");
+        row.push_str(&pad(&fmt_e(rep.gradient_norm, 4), 10));
+
+        self.emit(&row);
+    }
 }
 
 #[cfg(test)]

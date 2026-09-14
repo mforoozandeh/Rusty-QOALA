@@ -312,7 +312,10 @@ impl fmt::Display for SplitMethod {
 }
 
 /// Why the optimiser stopped.
+///
+/// Non-exhaustive, so more reasons can be added later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExitFlag {
     /// `norm(gradient,2) < tol_g`.
     GradientTolerance,
@@ -324,6 +327,8 @@ pub enum ExitFlag {
     MaxIterations,
     /// The line search could not find an acceptable point.
     LineSearchFailed,
+    /// A [`crate::optim::ProgressSink`] asked for the run to stop.
+    Cancelled,
 }
 
 impl ExitFlag {
@@ -335,6 +340,7 @@ impl ExitFlag {
             ExitFlag::FidelityTolerance => "fx > tol_f",
             ExitFlag::MaxIterations => "number of iterations exceeded",
             ExitFlag::LineSearchFailed => "line search found no minimum",
+            ExitFlag::Cancelled => "cancelled by the caller",
         }
     }
 }

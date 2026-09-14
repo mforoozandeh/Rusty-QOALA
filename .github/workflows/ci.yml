@@ -48,6 +48,52 @@ jobs:
       - name: Build
         run: cargo build --all-targets
 
+  wasm:
+    name: wasm32 build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # The library has to keep compiling for the browser: no filesystem, no
+      # monotonic clock, no OS entropy source.
+      - name: Library
+        run: cargo build --target wasm32-unknown-unknown
+      - name: Clippy
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+  gui:
+    name: gui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries for eframe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      - name: Formatting
+        run: cargo fmt -p qoala-gui --check
+      - name: Clippy
+        run: cargo clippy -p qoala-gui --all-targets -- -D warnings
+      - name: Test
+        run: cargo test -p qoala-gui --release
+      - name: Web build
+        run: |
+          cargo install --locked trunk
+          trunk build --release --config gui/Trunk.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qoala-web
+          path: gui/dist
+
   lint:
     name: fmt and clippy
     runs-on: ubuntu-latest

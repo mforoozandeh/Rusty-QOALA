@@ -18,6 +18,9 @@
 //! * [`optim::newton::fmaxnewton`] - the optimiser itself.
 //! * [`spinops`] - the spin operators, states, couplings and gates the
 //!   examples are built from.
+//! * [`gates`] - turn any Hilbert-space unitary into the Liouville-space
+//!   superoperator a gate optimisation targets, plus a library of the usual
+//!   one- and two-qubit gates.
 //!
 //! ## The numerical layers
 //!
@@ -37,7 +40,11 @@
 pub mod config;
 pub mod drivers;
 pub mod error;
+/// CSV writers the examples use; not available on `wasm32`, which has no
+/// filesystem.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod examples_io;
+pub mod gates;
 pub mod linalg;
 pub mod objfun;
 pub mod optim;
@@ -48,5 +55,6 @@ pub mod report;
 pub mod rodrigues;
 pub mod spinops;
 pub mod splittings;
+pub mod time;
 pub mod types;
 pub mod waveform;

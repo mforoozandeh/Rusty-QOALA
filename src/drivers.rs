@@ -12,8 +12,8 @@ use crate::config::{
 use crate::error::{QoalaError, Result};
 use crate::linalg::{CDense, CMat};
 use crate::objfun::{evaluate, Controls, EvalOrder, TrajData};
-use crate::optim::newton::{fmaxnewton, Optimisation};
-use crate::optim::CostFunction;
+use crate::optim::newton::{fmaxnewton_with_progress, Optimisation};
+use crate::optim::{CostFunction, NoProgress, ProgressSink};
 use crate::penalty::{penalty, PenaltyOrder};
 use crate::report::Reporter;
 use crate::types::*;
@@ -277,6 +277,25 @@ impl Default for Tuning {
 /// # Ok::<(), qoala::error::QoalaError>(())
 /// ```
 pub fn state2state_xy(spec: StateTransfer) -> Result<Optimisation> {
+    state2state_xy_with_progress(spec, &mut NoProgress)
+}
+
+/// As [`state2state_xy`], reporting every iteration to `progress` and
+/// stopping when it asks to.
+pub fn state2state_xy_with_progress(
+    spec: StateTransfer,
+    progress: &mut dyn ProgressSink,
+) -> Result<Optimisation> {
+    let (mut sys, guess) = state_transfer_system(&spec)?;
+    fmaxnewton_with_progress(&mut sys, &GrapeXyCost, &guess, progress)
+}
+
+/// The configured control system and starting waveform a
+/// [`state2state_xy`] run would use, without running it.
+///
+/// Useful for driving the optimiser yourself - with a progress sink, a
+/// different cost function, or a waveform carried over from an earlier run.
+pub fn state_transfer_system(spec: &StateTransfer) -> Result<(ControlSystem, DMatrix<f64>)> {
     let npairs = pair_count(&spec.cartops)?;
     let nspins = spec.omega.len();
     check_shapes(&spec.cartops, nspins, npairs, spec.amplitudes.len())?;
@@ -302,8 +321,7 @@ pub fn state2state_xy(spec: StateTransfer) -> Result<Optimisation> {
         .clone()
         .unwrap_or_else(|| random_pulse(spec.increments, 2 * npairs, spec.seed));
 
-    let mut sys = optimconset(opts)?;
-    fmaxnewton(&mut sys, &GrapeXyCost, &guess)
+    Ok((optimconset(opts)?, guess))
 }
 
 /// Adaptive optimal control for gate synthesis across a chain of coupled
@@ -335,6 +353,22 @@ pub fn state2state_xy(spec: StateTransfer) -> Result<Optimisation> {
 /// # Ok::<(), qoala::error::QoalaError>(())
 /// ```
 pub fn universal_gate_xy(spec: GateSynthesis) -> Result<Optimisation> {
+    universal_gate_xy_with_progress(spec, &mut NoProgress)
+}
+
+/// As [`universal_gate_xy`], reporting every iteration to `progress` and
+/// stopping when it asks to.
+pub fn universal_gate_xy_with_progress(
+    spec: GateSynthesis,
+    progress: &mut dyn ProgressSink,
+) -> Result<Optimisation> {
+    let (mut sys, guess) = gate_synthesis_system(&spec)?;
+    fmaxnewton_with_progress(&mut sys, &GrapeXyCost, &guess, progress)
+}
+
+/// The configured control system and starting waveform a
+/// [`universal_gate_xy`] run would use, without running it.
+pub fn gate_synthesis_system(spec: &GateSynthesis) -> Result<(ControlSystem, DMatrix<f64>)> {
     let npairs = pair_count(&spec.cartops)?;
     let nspins = spec.omega.len();
     check_shapes(&spec.cartops, nspins, npairs, spec.amplitudes.len())?;
@@ -357,8 +391,7 @@ pub fn universal_gate_xy(spec: GateSynthesis) -> Result<Optimisation> {
         .clone()
         .unwrap_or_else(|| random_pulse(spec.increments, 2 * npairs, spec.seed));
 
-    let mut sys = optimconset(opts)?;
-    fmaxnewton(&mut sys, &GrapeXyCost, &guess)
+    Ok((optimconset(opts)?, guess))
 }
 
 /// Options common to both drivers.

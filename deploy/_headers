@@ -1,0 +1,10 @@
+# Cloudflare Pages and Netlify read this file from the root of the published
+# directory.  Cross-origin isolation is optional - see deploy/README.md.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+
+# WebAssembly must be served with the right type or streaming compilation is
+# skipped; most hosts get this right already.
+/*.wasm
+  Content-Type: application/wasm

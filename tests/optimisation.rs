@@ -8,7 +8,8 @@ use num_complex::Complex64;
 use qoala::config::{optimconset, ControlOptions, DriftOptions, PowerLevels, TimeDependent};
 use qoala::drivers::{random_pulse, state2state_xy, GrapeXyCost, StateTransfer, Tuning};
 use qoala::objfun::FidelityKind;
-use qoala::optim::newton::fmaxnewton;
+use qoala::optim::newton::{fmaxnewton, fmaxnewton_with_progress};
+use qoala::optim::{IterationReport, ProgressSink};
 use qoala::report::Reporter;
 use qoala::spinops;
 use qoala::types::*;
@@ -341,4 +342,121 @@ fn penalty_weights_default_to_the_slice_count() {
     assert_eq!(sys.auxmat_method, PropMethod::Taylor);
     assert_eq!(sys.sparsity, 0.15);
     assert_eq!(sys.prop_zeroed, 1e-12);
+}
+
+/// A sink that records every report and never cancels.
+#[derive(Default)]
+struct Recorder {
+    reports: Vec<IterationReport>,
+}
+
+impl ProgressSink for Recorder {
+    fn on_iteration(&mut self, report: &IterationReport) {
+        self.reports.push(report.clone());
+    }
+}
+
+/// A sink that asks the optimiser to stop once it has seen `limit`
+/// iterations.
+struct CancelAfter {
+    limit: usize,
+    seen: usize,
+}
+
+impl ProgressSink for CancelAfter {
+    fn on_iteration(&mut self, report: &IterationReport) {
+        // Row zero is the initial evaluation, before any line search.
+        if report.iteration > 0 {
+            self.seen = report.iteration;
+        }
+    }
+    fn should_cancel(&self) -> bool {
+        self.seen >= self.limit
+    }
+}
+
+#[test]
+fn progress_reports_every_row_the_table_prints() {
+    let fixture = Fixture {
+        splitset: Some(vec![2, 3, 4]),
+        ..Default::default()
+    };
+    let mut sys = fixture.build().expect("build");
+    sys.max_iter = 8;
+    let guess = random_pulse(fixture.nsteps, 2 * fixture.nspins, Some(3));
+
+    let mut sink = Recorder::default();
+    let optimised =
+        fmaxnewton_with_progress(&mut sys, &GrapeXyCost, &guess, &mut sink).expect("optimisation");
+
+    // One row per printed table line: the initial evaluation at iteration 0,
+    // then one per optimiser iteration.
+    let iters = optimised.data.count.iter;
+    assert!(iters > 0, "the fixture should complete some iterations");
+    assert_eq!(sink.reports.len(), iters + 1);
+    assert_eq!(
+        sink.reports.iter().filter(|r| r.iteration > 0).count(),
+        iters
+    );
+
+    // Iteration indices run 0, 1, ..., iters in order.
+    for (n, report) in sink.reports.iter().enumerate() {
+        assert_eq!(report.iteration, n);
+    }
+
+    // Every reported fidelity is the one recorded in fx_store for that row,
+    // and the last one in particular.
+    for report in &sink.reports {
+        let stored = optimised.data.fx_store[(report.iteration, 1)];
+        assert_eq!(
+            report.fidelity, stored,
+            "row {} fidelity disagrees with fx_store",
+            report.iteration
+        );
+    }
+    let last = sink.reports.last().expect("at least one report");
+    assert_eq!(last.fidelity, optimised.data.fx_store[(iters, 1)]);
+
+    // The structured fields carry the adaptive state and the clock.
+    assert!(last.split_order >= 2 && last.split_order <= 4);
+    assert!(last.trotter_number >= 1);
+    assert!(last.elapsed_s >= sink.reports[0].elapsed_s);
+    assert_eq!(last.counters.iter, iters);
+}
+
+#[test]
+fn a_sink_can_cancel_the_run() {
+    let fixture = Fixture::default();
+    let mut sys = fixture.build().expect("build");
+    sys.max_iter = 40;
+    let guess = random_pulse(fixture.nsteps, 2 * fixture.nspins, Some(3));
+
+    let mut sink = CancelAfter { limit: 3, seen: 0 };
+    let optimised =
+        fmaxnewton_with_progress(&mut sys, &GrapeXyCost, &guess, &mut sink).expect("optimisation");
+
+    assert_eq!(optimised.exitflag, ExitFlag::Cancelled);
+    assert_eq!(optimised.data.count.iter, 3);
+    // The waveform reached so far is still returned.
+    assert_eq!(
+        optimised.waveform.shape(),
+        (fixture.nsteps, 2 * fixture.nspins)
+    );
+}
+
+/// A cancel request that only arrives once the iteration budget is already
+/// spent changes nothing: the run stopped for the ordinary reason.
+#[test]
+fn a_cancel_after_the_budget_is_spent_still_reports_max_iterations() {
+    let fixture = Fixture::default();
+    let mut sys = fixture.build().expect("build");
+    sys.max_iter = 3;
+    let guess = random_pulse(fixture.nsteps, 2 * fixture.nspins, Some(3));
+
+    let mut sink = CancelAfter { limit: 3, seen: 0 };
+    let optimised =
+        fmaxnewton_with_progress(&mut sys, &GrapeXyCost, &guess, &mut sink).expect("optimisation");
+
+    assert_eq!(optimised.exitflag, ExitFlag::MaxIterations);
+    assert_eq!(optimised.data.count.iter, 3);
 }

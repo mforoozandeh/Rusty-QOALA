@@ -20,10 +20,10 @@ use crate::config::{ControlSystem, DriftSystem};
 use crate::error::{QoalaError, Result};
 use crate::linalg::{real_trace_adjoint, CDense, CMat};
 use crate::propagate::{propagate_state, propagator};
+use crate::time::Instant;
 use crate::types::StateSpace;
 use nalgebra::DMatrix;
 use num_complex::Complex64;
-use std::time::Instant;
 
 /// Evaluate the auxiliary-matrix objective.
 #[allow(clippy::too_many_arguments)]
