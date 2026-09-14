@@ -33,6 +33,10 @@ qoala = { path = ".." }
 eframe = { version = "0.32", default-features = false, features = [
     "default_fonts",
     "glow",
+    # Without this eframe hands the app no storage at all, so the setup is
+    # never saved between sessions: localStorage in the browser, a file in the
+    # platform's app-data directory natively.
+    "persistence",
     "wayland",
     "x11",
 ] }
