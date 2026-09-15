@@ -81,6 +81,7 @@ impl QoalaApp {
 
         let mut qoala = stored(QOALA_KEY)
             .and_then(|s| serde_json::from_str::<Setup>(&s).ok())
+            .filter(|s| s.shape_problems().is_empty())
             .unwrap_or_else(presets::default_setup);
         let mut escalade = stored(ESCALADE_KEY)
             .and_then(|s| serde_json::from_str::<EscaladeSetup>(&s).ok())
@@ -91,15 +92,17 @@ impl QoalaApp {
 
         // A problem carried in the URL fragment wins over storage, so a
         // shared link always shows what the sender meant.
+        let mut message = None;
         match platform::problem_from_url() {
-            Some(Problem::Qoala(s)) => {
+            Some(Ok(Problem::Qoala(s))) => {
                 qoala = s;
                 algorithm = Algorithm::Qoala;
             }
-            Some(Problem::Escalade(s)) => {
+            Some(Ok(Problem::Escalade(s))) => {
                 escalade = s;
                 algorithm = Algorithm::Escalade;
             }
+            Some(Err(e)) => message = Some(format!("the setup in the link was not loaded: {e}")),
             None => {}
         }
 
@@ -114,7 +117,7 @@ impl QoalaApp {
             analysis: None,
             map_texture: None,
             running: None,
-            message: None,
+            message,
             status: Status::Idle,
             platform,
             show_channels: Vec::new(),

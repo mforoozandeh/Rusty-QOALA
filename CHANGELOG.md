@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0]
 
 ### Added
 
@@ -32,6 +32,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rises from 1.85 to match.
 - ESCALADE limits the field amplitude, `sqrt(x^2 + y^2)`, with a penalty,
   where the MATLAB bounds each quadrature. See `DEVIATIONS.md`.
+- **`GrapeXyCost` refuses what it would have ignored**: more than one row of
+  power levels, or more than one initial and target, now return
+  `QoalaError::NotImplemented`. Both used to optimise the first member alone.
+- **`optimconset` refuses a non-uniform `pulse_dt` for the split-operator
+  objectives** (`QoalaError::NotImplemented`); it used to warn and build the
+  interaction propagators for the average slice. Slices equal to 1e-12 count
+  as uniform. The auxiliary-matrix objectives are unaffected.
+- **`optimconset` checks numbers and shapes before parsing**: empty or
+  non-finite time grids, non-positive or non-finite power levels, empty
+  power-level lists, non-finite control operators, and drift, state,
+  propagator and `spin_control` shapes that disagree with the control
+  operators are errors rather than panics or later failures.
+- The propagator cache format is now version 2 and records the inputs each
+  file was built from. Version 1 files are rebuilt on first use.
+  `splittings::write_propagator_cache` and `read_propagator_cache` are no
+  longer public.
+
+### Fixed
+
+- Krylov propagation in Hilbert space applied `U rho` instead of
+  `U rho U^dagger`. It is the default `step_method`, so value-only
+  auxiliary-matrix evaluations and fidelity checks in Hilbert space disagreed
+  with the gradient path.
+- The propagator cache (`prop_cache = 'store'`) reused a file for the same
+  Trotter number and order even when the time step or interaction had
+  changed. Files are also now written atomically.
+- After a failed line search the recorded fidelity, check and diagnostics
+  came from the last rejected trial rather than the waveform that was kept.
+- The norms propagate a NaN instead of losing it in an `f64::max` reduction,
+  which returns the other operand when one side is NaN and so let a matrix
+  holding a NaN report a finite norm. `CMat::norm_1` and `norm_2_dense` now
+  return NaN for such a matrix, and infinity for one that is merely infinite.
+  `expm_pade` checks its entries rather than its norm, and `expm_taylor` and
+  `krylov_step` refuse a non-finite generator: Krylov used to reduce to zero
+  sub-steps and return the state untouched, as though it had propagated.
+- Non-finite numbers no longer travel on through the optimiser. An objective
+  value, gradient or Hessian that is not finite is refused at the point it was
+  evaluated; the Hessian regularisation errors rather than shifting the
+  spectrum by a non-finite eigenvalue; and `cond_2_symmetric` reports an
+  infinite condition number for a non-finite matrix, where a NaN used to lose
+  every comparison and report the best conditioning there is.
+- ESCALADE's `max_amplitude` propagates a NaN instead of reducing it away,
+  which made a NaN pulse look like a zero-amplitude one, comfortably inside
+  the limit, and a starting pulse holding a non-finite point is now refused.
+- The objective functions return `QoalaError::Dimension` for a waveform whose
+  slice count differs from the time grid, and the drivers check `init_pulse`
+  against the pulse shape, instead of panicking.
+- The application no longer panics on a stored session, link or worker
+  message whose arrays do not match its spin and pair counts; a link like
+  that is reported on screen and not loaded.
 
 ## [1.1.0]
 

@@ -319,7 +319,26 @@ impl CMat {
                 }
             }
         }
+        // f64::max returns the other operand when one side is NaN, so a NaN
+        // has to be caught before the reduction.  MATLAB's norm propagates it,
+        // and callers read a finite norm as "this matrix is usable".
+        if sums.iter().any(|v| v.is_nan()) {
+            return f64::NAN;
+        }
         sums.into_iter().fold(0.0, f64::max)
+    }
+
+    /// Whether every stored entry is finite.
+    ///
+    /// The norms are no use for this: they reduce with [`f64::max`], which
+    /// returns the other operand when one is `NaN`, so a matrix holding `NaN`
+    /// can report a perfectly finite norm.
+    pub fn is_finite(&self) -> bool {
+        let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+        match self {
+            CMat::Dense(m) => m.iter().all(finite),
+            CMat::Sparse(m) => m.values().iter().all(finite),
+        }
     }
 
     /// Largest singular value (MATLAB `norm(full(A),2)`).
@@ -397,6 +416,15 @@ pub fn norm_2_dense(a: &CDense) -> f64 {
     if a.nrows() == 0 || a.ncols() == 0 {
         return 0.0;
     }
+    // The eigensolver has nothing sensible to do with a non-finite entry, and
+    // the same `f64::max` reduction would hide a NaN afterwards.  MATLAB's
+    // norm propagates both, with NaN beating infinity.
+    if a.iter().any(|z| z.re.is_nan() || z.im.is_nan()) {
+        return f64::NAN;
+    }
+    if a.iter().any(|z| !z.re.is_finite() || !z.im.is_finite()) {
+        return f64::INFINITY;
+    }
     // Build the Hermitian Gram matrix G = A^H A, then realify it as
     //     [[Re G, -Im G], [Im G, Re G]]
     // whose eigenvalues are those of G, each twice.
@@ -450,7 +478,16 @@ pub fn real_trace_adjoint(a: &CDense, b: &CDense) -> f64 {
 
 /// Condition number in the 2-norm of a real symmetric matrix.
 pub fn cond_2_symmetric(a: &DMatrix<f64>) -> f64 {
+    // A NaN fails every comparison below, so it would leave hi = 0 and
+    // lo = INFINITY and report a condition number of zero - the best possible
+    // conditioning - for a matrix that has none.
+    if a.iter().any(|v| !v.is_finite()) {
+        return f64::INFINITY;
+    }
     let ev = a.clone().symmetric_eigenvalues();
+    if ev.iter().any(|v| !v.is_finite()) {
+        return f64::INFINITY;
+    }
     let mut hi = 0.0f64;
     let mut lo = f64::INFINITY;
     for v in ev.iter() {
@@ -637,5 +674,44 @@ mod tests {
         for v in dd.iter() {
             assert_relative_eq!(*v, 2.0, epsilon = 1e-9);
         }
+    }
+
+    /// Callers treat a finite norm as "this matrix is usable", so a NaN must
+    /// survive the reduction rather than being dropped by `f64::max`.
+    #[test]
+    fn the_norms_propagate_a_nan_and_an_infinity() {
+        let nan = c(f64::NAN, 0.0);
+        for m in [
+            CMat::Dense(CDense::from_row_slice(2, 2, &[nan, C0, C0, C1])),
+            CMat::from_triplets(2, 2, [(0, 0, nan), (1, 1, C1)]).unwrap(),
+        ] {
+            assert!(m.norm_1().is_nan(), "norm_1 hid a NaN");
+            assert!(m.norm_2().is_nan(), "norm_2 hid a NaN");
+            assert!(!m.is_finite());
+        }
+        assert!(norm_2_state(&CDense::from_column_slice(2, 1, &[nan, C1])).is_nan());
+
+        // An infinity is not a NaN: it comes back as itself.
+        let inf = CMat::Dense(CDense::from_row_slice(
+            2,
+            2,
+            &[c(f64::INFINITY, 0.0), C0, C0, C1],
+        ));
+        assert!(inf.norm_1().is_infinite());
+        assert!(inf.norm_2().is_infinite());
+        assert!(!inf.is_finite());
+    }
+
+    /// A NaN loses every comparison, which would otherwise leave the largest
+    /// eigenvalue at zero and report the best conditioning there is.
+    #[test]
+    fn a_condition_number_is_infinite_when_the_matrix_is_not_finite() {
+        let nan = DMatrix::from_row_slice(2, 2, &[f64::NAN, 0.0, 0.0, 1.0]);
+        assert!(cond_2_symmetric(&nan).is_infinite());
+        let inf = DMatrix::from_row_slice(2, 2, &[f64::INFINITY, 0.0, 0.0, 1.0]);
+        assert!(cond_2_symmetric(&inf).is_infinite());
+        // A finite matrix still reports its own condition number.
+        let ok = DMatrix::from_row_slice(2, 2, &[2.0, 0.0, 0.0, 1.0]);
+        assert_relative_eq!(cond_2_symmetric(&ok), 2.0, epsilon = 1e-12);
     }
 }

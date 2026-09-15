@@ -157,10 +157,20 @@ pub fn phase_sensitivity(
 }
 
 /// The largest `sqrt(f^2 + g^2)` in the pulse.
+///
+/// A NaN is propagated rather than reduced away: `f64::max` returns the other
+/// operand when one side is NaN, so a pulse full of NaN would otherwise report
+/// an amplitude of zero, which reads as comfortably inside the limit.
 pub fn max_amplitude(pulse: &DMatrix<f64>) -> f64 {
-    (0..pulse.nrows())
-        .map(|r| pulse[(r, 0)].hypot(pulse[(r, 1)]))
-        .fold(0.0, f64::max)
+    let mut out = 0.0f64;
+    for r in 0..pulse.nrows() {
+        let amplitude = pulse[(r, 0)].hypot(pulse[(r, 1)]);
+        if amplitude.is_nan() {
+            return f64::NAN;
+        }
+        out = out.max(amplitude);
+    }
+    out
 }
 
 fn plot_offsets(sw_hz: f64, npoints: usize) -> Vec<f64> {
@@ -201,6 +211,16 @@ mod tests {
         let m = final_magnetisation(&pulse, tau, rf, 0.0);
         assert!(m.x.abs() < 1e-12 && (m.y + 1.0).abs() < 1e-12 && m.z.abs() < 1e-12);
         assert!((m.transverse() - 1.0).abs() < 1e-12);
+    }
+
+    /// The amplitude is what the limit is judged against, so a NaN must not
+    /// reduce away to a comfortable-looking zero.
+    #[test]
+    fn the_largest_amplitude_propagates_a_nan() {
+        let pulse = DMatrix::from_row_slice(2, 2, &[0.3, 0.4, f64::NAN, 0.0]);
+        assert!(max_amplitude(&pulse).is_nan());
+        let finite = DMatrix::from_row_slice(2, 2, &[0.3, 0.4, 0.6, 0.8]);
+        assert!((max_amplitude(&finite) - 1.0).abs() < 1e-12);
     }
 
     #[test]

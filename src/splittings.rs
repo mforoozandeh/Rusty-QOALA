@@ -28,9 +28,11 @@ use num_complex::Complex64;
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 #[cfg(not(target_arch = "wasm32"))]
-use std::io::{Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Splitting constants and the interleaving order for one `(order, trotter)`
 /// pair.
@@ -293,7 +295,8 @@ impl SplitSet {
     }
 
     /// Build a set, reusing a cached copy of the interaction propagators when
-    /// one exists.  This is the `prop_cache = 'store'` path.
+    /// one was built from the same inputs.  This is the `prop_cache = 'store'`
+    /// path.
     ///
     /// Native only: `wasm32` has no filesystem, and
     /// [`crate::types::PropCache::Store`] is rejected there.
@@ -309,15 +312,16 @@ impl SplitSet {
     ) -> Result<Self> {
         let coeffs = split_coefficients(order, trotter)?;
         let file = cache_dir.join(format!("prop_t{trotter}o{order}.bin"));
-        if file.exists() {
-            if let Ok(inter_prop) = read_propagator_cache(&file) {
-                return Ok(SplitSet {
-                    trotter,
-                    order,
-                    coeffs,
-                    inter_prop,
-                });
-            }
+        let key = cache_key(order, trotter, dt, interaction, method, nonzero_tol);
+        // A missing, unreadable, older-format or differently built file is a
+        // miss: it is rebuilt and replaced, never trusted.
+        if let Ok(inter_prop) = read_propagator_cache(&file, &key) {
+            return Ok(SplitSet {
+                trotter,
+                order,
+                coeffs,
+                inter_prop,
+            });
         }
         let inter_prop = interaction_propagators(
             &coeffs,
@@ -329,7 +333,7 @@ impl SplitSet {
             nonzero_tol,
         )?;
         fs::create_dir_all(cache_dir)?;
-        write_propagator_cache(&file, &inter_prop)?;
+        write_propagator_cache(&file, &key, &inter_prop)?;
         Ok(SplitSet {
             trotter,
             order,
@@ -347,14 +351,73 @@ impl SplitSet {
     }
 }
 
+/// Format tag.  Version 2 records the inputs; version 1 files carry no record
+/// and are rebuilt.
 #[cfg(not(target_arch = "wasm32"))]
-const CACHE_MAGIC: &[u8; 8] = b"QOALAP01";
+const CACHE_MAGIC: &[u8; 8] = b"QOALAP02";
 
-/// Write interaction propagators to the scratch cache.
+/// Every input the interaction propagators depend on, as bytes a cached file
+/// must match exactly.  The file name carries only the Trotter number and
+/// order; the time step, interaction, method and cutoff live here.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn write_propagator_cache(path: &Path, props: &[Option<CMat>]) -> Result<()> {
-    let mut f = fs::File::create(path)?;
+fn cache_key(
+    order: usize,
+    trotter: usize,
+    dt: f64,
+    interaction: &CMat,
+    method: PropMethod,
+    nonzero_tol: f64,
+) -> Vec<u8> {
+    let sp = interaction.to_sparse();
+    let mut key = Vec::new();
+    for n in [order, trotter, sp.nrows(), sp.ncols()] {
+        key.extend_from_slice(&(n as u64).to_le_bytes());
+    }
+    key.extend_from_slice(&dt.to_le_bytes());
+    key.extend_from_slice(&nonzero_tol.to_le_bytes());
+    key.push(match method {
+        PropMethod::Pade => 0,
+        PropMethod::Taylor => 1,
+        PropMethod::Krylov => 2,
+    });
+    // Explicit zeros depend on how the matrix was assembled, not on its value.
+    let zero = Complex64::new(0.0, 0.0);
+    for (r, c, v) in sp.triplet_iter().filter(|(_, _, v)| **v != zero) {
+        key.extend_from_slice(&(r as u64).to_le_bytes());
+        key.extend_from_slice(&(c as u64).to_le_bytes());
+        key.extend_from_slice(&v.re.to_le_bytes());
+        key.extend_from_slice(&v.im.to_le_bytes());
+    }
+    key
+}
+
+/// Write interaction propagators, and the inputs they were built from, to the
+/// scratch cache.
+///
+/// The file is written under a temporary name and renamed into place, so a
+/// reader never sees it half written and concurrent writers cannot interleave.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_propagator_cache(path: &Path, key: &[u8], props: &[Option<CMat>]) -> Result<()> {
+    static SERIAL: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "tmp{}-{}",
+        std::process::id(),
+        SERIAL.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = write_cache_file(&tmp, key, props)
+        .and_then(|()| fs::rename(&tmp, path).map_err(Into::into));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_cache_file(path: &Path, key: &[u8], props: &[Option<CMat>]) -> Result<()> {
+    let mut f = BufWriter::new(fs::File::create(path)?);
     f.write_all(CACHE_MAGIC)?;
+    f.write_all(&(key.len() as u64).to_le_bytes())?;
+    f.write_all(key)?;
     f.write_all(&(props.len() as u64).to_le_bytes())?;
     for p in props {
         match p {
@@ -376,29 +439,36 @@ pub fn write_propagator_cache(path: &Path, props: &[Option<CMat>]) -> Result<()>
             }
         }
     }
+    f.into_inner().map_err(|e| e.into_error())?.sync_all()?;
     Ok(())
 }
 
-/// Read interaction propagators back from the scratch cache.
+/// Read interaction propagators back from the scratch cache, refusing a file
+/// in another format or built from inputs other than `key`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_propagator_cache(path: &Path) -> Result<Vec<Option<CMat>>> {
-    let mut f = fs::File::open(path)?;
+fn read_propagator_cache(path: &Path, key: &[u8]) -> Result<Vec<Option<CMat>>> {
+    let mut f = BufReader::new(fs::File::open(path)?);
     let mut magic = [0u8; 8];
     f.read_exact(&mut magic)?;
     if &magic != CACHE_MAGIC {
         return Err(QoalaError::Io(format!(
-            "{} is not a QOALA propagator cache",
+            "{} is not a current QOALA propagator cache",
             path.display()
         )));
     }
-    let mut u64buf = [0u8; 8];
-    let mut f64buf = [0u8; 8];
-    let mut read_u64 = |f: &mut fs::File| -> Result<u64> {
-        f.read_exact(&mut u64buf)?;
-        Ok(u64::from_le_bytes(u64buf))
-    };
-    let count = read_u64(&mut f)? as usize;
-    let mut out = Vec::with_capacity(count);
+    let stale = || QoalaError::Io(format!("{} was built from other inputs", path.display()));
+    if read_u64(&mut f)? != key.len() as u64 {
+        return Err(stale());
+    }
+    let mut stored = vec![0u8; key.len()];
+    f.read_exact(&mut stored)?;
+    if stored != key {
+        return Err(stale());
+    }
+
+    // Counts come from the file, so nothing is preallocated from them.
+    let count = read_u64(&mut f)?;
+    let mut out = Vec::new();
     for _ in 0..count {
         let mut tag = [0u8; 1];
         f.read_exact(&mut tag)?;
@@ -408,20 +478,30 @@ pub fn read_propagator_cache(path: &Path) -> Result<Vec<Option<CMat>>> {
         }
         let rows = read_u64(&mut f)? as usize;
         let cols = read_u64(&mut f)? as usize;
-        let nnz = read_u64(&mut f)? as usize;
-        let mut triplets = Vec::with_capacity(nnz);
+        let nnz = read_u64(&mut f)?;
+        let mut triplets = Vec::new();
         for _ in 0..nnz {
             let r = read_u64(&mut f)? as usize;
             let c = read_u64(&mut f)? as usize;
-            f.read_exact(&mut f64buf)?;
-            let re = f64::from_le_bytes(f64buf);
-            f.read_exact(&mut f64buf)?;
-            let im = f64::from_le_bytes(f64buf);
+            let re = read_f64(&mut f)?;
+            let im = read_f64(&mut f)?;
             triplets.push((r, c, Complex64::new(re, im)));
         }
         out.push(Some(CMat::from_triplets(rows, cols, triplets)?));
     }
     Ok(out)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_u64(r: &mut impl Read) -> Result<u64> {
+    let mut buf = [0u8; 8];
+    r.read_exact(&mut buf)?;
+    Ok(u64::from_le_bytes(buf))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_f64(r: &mut impl Read) -> Result<f64> {
+    read_u64(r).map(f64::from_bits)
 }
 
 #[cfg(test)]
@@ -584,13 +664,16 @@ mod tests {
         let dir = std::env::temp_dir().join("qoala_split_cache_test");
         let _ = fs::create_dir_all(&dir);
         let (a, _) = test_pair();
+        let a = CMat::Dense(a);
         let coeffs = split_coefficients(4, 2).unwrap();
         let props =
-            interaction_propagators(&coeffs, 4, 2, 0.1, &CMat::Dense(a), PropMethod::Pade, 1e-14)
-                .unwrap();
+            interaction_propagators(&coeffs, 4, 2, 0.1, &a, PropMethod::Pade, 1e-14).unwrap();
         let path = dir.join("prop_t2o4.bin");
-        write_propagator_cache(&path, &props).unwrap();
-        let back = read_propagator_cache(&path).unwrap();
+        let key = cache_key(4, 2, 0.1, &a, PropMethod::Pade, 1e-14);
+        write_propagator_cache(&path, &key, &props).unwrap();
+        let other = cache_key(4, 2, 0.2, &a, PropMethod::Pade, 1e-14);
+        assert!(read_propagator_cache(&path, &other).is_err());
+        let back = read_propagator_cache(&path, &key).unwrap();
         assert_eq!(back.len(), props.len());
         for (x, y) in props.iter().zip(back.iter()) {
             match (x, y) {
@@ -601,6 +684,43 @@ mod tests {
                 _ => panic!("cache round trip changed an entry"),
             }
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn propagator_cache_is_rebuilt_when_its_inputs_change() {
+        let dir = std::env::temp_dir().join("qoala_split_cache_inputs_test");
+        let _ = fs::remove_dir_all(&dir);
+        let (a, b) = test_pair();
+        let (a, b) = (CMat::Dense(a), CMat::Dense(b));
+        let dense = |s: &SplitSet| -> Vec<CDense> {
+            s.inter_prop
+                .iter()
+                .flatten()
+                .map(|m| m.to_dense())
+                .collect()
+        };
+
+        // Same (trotter, order) every time, so every call hits the same file.
+        for (dt, interaction) in [(0.1, &a), (0.2, &a), (0.2, &b), (0.1, &a)] {
+            let cached =
+                SplitSet::build_cached(4, 2, dt, interaction, PropMethod::Taylor, 1e-14, &dir)
+                    .unwrap();
+            let fresh = SplitSet::build(4, 2, dt, interaction, PropMethod::Taylor, 1e-14).unwrap();
+            let (cached, fresh) = (dense(&cached), dense(&fresh));
+            assert_eq!(cached.len(), fresh.len());
+            for (p, q) in cached.iter().zip(fresh.iter()) {
+                assert_relative_eq!((p - q).norm(), 0.0, epsilon = 1e-14);
+            }
+        }
+
+        // The last build is what the file now holds, and only it matches.
+        let path = dir.join("prop_t2o4.bin");
+        let last = cache_key(4, 2, 0.1, &a, PropMethod::Taylor, 1e-14);
+        assert!(read_propagator_cache(&path, &last).is_ok());
+        let tol = cache_key(4, 2, 0.1, &a, PropMethod::Taylor, 1e-12);
+        assert!(read_propagator_cache(&path, &tol).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }

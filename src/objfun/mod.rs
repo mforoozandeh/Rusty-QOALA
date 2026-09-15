@@ -108,6 +108,14 @@ pub fn evaluate(
     targ: &CDense,
     order: EvalOrder,
 ) -> Result<ObjectiveResult> {
+    // Every objective reads the slice duration from the time grid.
+    if wf.nrows() != sys.pulse_dt.len() {
+        return Err(QoalaError::Dimension(format!(
+            "the waveform has {} slices but the time grid has {}",
+            wf.nrows(),
+            sys.pulse_dt.len()
+        )));
+    }
     match which {
         ObjectiveFn::StateQoala => qoala::objective(
             FidelityKind::State,

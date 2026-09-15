@@ -82,19 +82,24 @@ pub fn fragment_for_problem(problem: &Problem) -> Result<String, String> {
     Ok(format!("setup={}", encode(&json)))
 }
 
-/// Read a problem out of a fragment, ignoring anything that is not one.
-pub fn problem_from_fragment(fragment: &str) -> Option<Problem> {
+/// Read a problem out of a fragment: `None` when it carries none, an error
+/// when the one it carries cannot be used.
+pub fn problem_from_fragment(fragment: &str) -> Option<Result<Problem, String>> {
     let fragment = fragment.trim_start_matches('#');
     for part in fragment.split('&') {
         if let Some(value) = part.strip_prefix("setup=") {
-            return Problem::from_json(&decode(value)?);
+            return Some(
+                decode(value)
+                    .ok_or_else(|| "the link is not validly encoded".to_string())
+                    .and_then(|json| Problem::from_json(&json)),
+            );
         }
     }
     None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn problem_from_url() -> Option<Problem> {
+pub fn problem_from_url() -> Option<Result<Problem, String>> {
     // The desktop application accepts one as a command-line argument, which
     // makes a shared link work by paste.
     let arg = std::env::args().nth(1)?;
@@ -103,7 +108,7 @@ pub fn problem_from_url() -> Option<Problem> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn problem_from_url() -> Option<Problem> {
+pub fn problem_from_url() -> Option<Result<Problem, String>> {
     let hash = web_sys::window()?.location().hash().ok()?;
     problem_from_fragment(&hash)
 }
@@ -143,11 +148,11 @@ mod tests {
         for problem in presets::every() {
             let fragment = fragment_for_problem(&problem).unwrap();
             assert!(!fragment.contains('#'));
-            let back = problem_from_fragment(&fragment).expect("decode");
-            assert_eq!(back, problem);
+            let back = problem_from_fragment(&fragment).expect("setup key");
+            assert_eq!(back, Ok(problem.clone()));
             // And with the leading marker a browser would hand back.
-            let back = problem_from_fragment(&format!("#{fragment}")).expect("decode");
-            assert_eq!(back, problem);
+            let back = problem_from_fragment(&format!("#{fragment}")).expect("setup key");
+            assert_eq!(back, Ok(problem));
         }
     }
 
@@ -159,16 +164,19 @@ mod tests {
         let fragment = format!("#setup={}", encode(&json));
         assert_eq!(
             problem_from_fragment(&fragment),
-            Some(Problem::Qoala(setup))
+            Some(Ok(Problem::Qoala(setup)))
         );
     }
 
     #[test]
-    fn junk_fragments_are_ignored_rather_than_panicking() {
+    fn junk_fragments_are_reported_rather_than_panicking() {
         assert!(problem_from_fragment("").is_none());
         assert!(problem_from_fragment("#other=1").is_none());
-        assert!(problem_from_fragment("setup=not%20json").is_none());
-        assert!(problem_from_fragment("setup=%").is_none());
-        assert!(problem_from_fragment("setup=%ZZ").is_none());
+        for junk in ["setup=not%20json", "setup=%", "setup=%ZZ"] {
+            assert!(
+                matches!(problem_from_fragment(junk), Some(Err(_))),
+                "{junk}"
+            );
+        }
     }
 }

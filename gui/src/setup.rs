@@ -403,12 +403,43 @@ impl Setup {
             .collect()
     }
 
+    /// Counts out of range, or arrays whose lengths disagree with the counts
+    /// that size them.
+    ///
+    /// The editor keeps these consistent, but JSON from storage, a link or a
+    /// file need not, and the editor, [`Setup::problems`] and the run all
+    /// index on the assumption.
+    pub fn shape_problems(&self) -> Vec<String> {
+        // Everything else is sized from the spin count, so it goes first.
+        if !(2..=MAX_SPINS).contains(&self.nspins) {
+            return vec![format!("between 2 and {MAX_SPINS} spins, please")];
+        }
+        let mut out = Vec::new();
+        let mut expect = |what: &str, got: usize, want: usize| {
+            if got != want {
+                out.push(format!("{what} has {got} entries where {want} are needed"));
+            }
+        };
+        expect("offsets_hz", self.offsets_hz.len(), self.nspins);
+        expect("couplings", self.couplings.len(), pair_count(self.nspins));
+        expect("amplitudes_hz", self.amplitudes_hz.len(), self.npairs);
+        expect("spin_control", self.spin_control.len(), self.nspins);
+        for (s, row) in self.spin_control.iter().enumerate() {
+            expect(
+                &format!("spin_control row {}", s + 1),
+                row.len(),
+                self.npairs,
+            );
+        }
+        out
+    }
+
     /// Anything that would make the run fail or be meaningless, as a message
     /// fit to put on screen.
     pub fn problems(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if !(2..=MAX_SPINS).contains(&self.nspins) {
-            out.push(format!("between 2 and {MAX_SPINS} spins, please"));
+        let mut out = self.shape_problems();
+        if !out.is_empty() {
+            return out;
         }
         if self.npairs == 0 {
             out.push("at least one control pair is needed".into());

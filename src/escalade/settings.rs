@@ -218,6 +218,9 @@ impl Escalade {
                         pulse.ncols()
                     ));
                 }
+                if pulse.iter().any(|v| !v.is_finite()) {
+                    return Err(bad!("the starting pulse must be finite"));
+                }
                 pulse.clone()
             }
             None => {
@@ -341,6 +344,22 @@ mod tests {
         .unwrap();
         assert_eq!(s.nspins, 3);
         assert_eq!(s.initial.len(), 3);
+    }
+
+    #[test]
+    fn a_starting_pulse_that_is_not_finite_is_refused() {
+        let mut spec = Escalade {
+            start: Some(DMatrix::from_element(4, 2, 0.1)),
+            seed: Some(4),
+            ..Default::default()
+        };
+        assert!(spec.resolve().is_ok());
+        spec.start = Some(DMatrix::from_fn(
+            4,
+            2,
+            |r, _| if r == 2 { f64::NAN } else { 0.1 },
+        ));
+        assert!(spec.resolve().is_err());
     }
 
     #[test]

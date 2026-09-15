@@ -86,6 +86,11 @@ impl Fixture {
 
     /// Build the control system.
     pub fn build(&self) -> Result<ControlSystem> {
+        optimconset(self.options()?)
+    }
+
+    /// The options [`Fixture::build`] parses, for tests that alter them first.
+    pub fn options(&self) -> Result<ControlOptions> {
         let two_pi = 2.0 * std::f64::consts::PI;
         let dim = 4usize.pow(self.nspins as u32);
         let cartops = spinops::one_pair_per_spin(self.nspins);
@@ -146,7 +151,7 @@ impl Fixture {
                 self.nspins - 1,
             ))]);
         }
-        optimconset(opts)
+        Ok(opts)
     }
 }
 

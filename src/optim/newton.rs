@@ -9,7 +9,7 @@ use super::linesearch::fmaxlinesearch;
 use super::progress::{IterationReport, NoProgress, ProgressSink};
 use super::{objective, to_vector, CostFunction, ObjectiveRequest, OptData};
 use crate::config::ControlSystem;
-use crate::error::Result;
+use crate::error::{QoalaError, Result};
 use crate::linalg::{cond_2_symmetric, is_positive_definite};
 use crate::report::{fmt_e, int2str, pad, Reporter};
 use crate::types::{ExitFlag, OptMethod};
@@ -157,7 +157,7 @@ pub fn fmaxnewton_with_progress(
                     // Symmetrise, then regularise the negated Hessian so the
                     // Newton step is well conditioned.
                     let h = (&h + h.transpose()) * 0.5;
-                    let reg = hessian_regularise(sys, &mut data, &(-h), &g);
+                    let reg = hessian_regularise(sys, &mut data, &(-h), &g)?;
                     reg.lu().solve(&g).unwrap_or_else(|| g.clone())
                 }
             };
@@ -293,12 +293,12 @@ fn hessian_regularise(
     data: &mut OptData,
     h_in: &DMatrix<f64>,
     g: &DVector<f64>,
-) -> DMatrix<f64> {
+) -> Result<DMatrix<f64>> {
     let mut h = h_in.clone();
     let mut alpha = sys.reg_alpha;
 
     if is_positive_definite(&h) && cond_2_symmetric(&h) < sys.reg_max_cond {
-        return h;
+        return Ok(h);
     }
 
     let n = h.nrows();
@@ -315,12 +315,25 @@ fn hessian_regularise(
             aug[(n, r)] = alpha * g[r];
         }
 
-        let sigma = aug
-            .clone()
-            .symmetric_eigenvalues()
-            .iter()
-            .cloned()
-            .fold(0.0f64, f64::min);
+        // Checked before the eigensolver sees it: h and g arrive finite, but
+        // alpha^2 h can still overflow while the block above is assembled, and
+        // the solver has nothing sensible to do with the result.
+        if aug.iter().any(|v| !v.is_finite()) {
+            return Err(QoalaError::Numerical(
+                "the augmented Hessian is not finite; check reg_alpha against the Hessian scale"
+                    .into(),
+            ));
+        }
+
+        let eigenvalues = aug.clone().symmetric_eigenvalues();
+        if eigenvalues.iter().any(|v| !v.is_finite()) {
+            return Err(QoalaError::Numerical(
+                "the augmented Hessian has an eigenvalue that is not finite".into(),
+            ));
+        }
+        // The identity is zero, not infinity: the shift only ever moves the
+        // spectrum up, as the MATLAB's min(0, min(eig)) does.
+        let sigma = eigenvalues.iter().cloned().fold(0.0f64, f64::min);
         for i in 0..=n {
             aug[(i, i)] -= sigma;
         }
@@ -334,7 +347,7 @@ fn hessian_regularise(
         }
     }
 
-    (&h + h.transpose()) * 0.5
+    Ok((&h + h.transpose()) * 0.5)
 }
 
 /// Which optional columns the iteration table carries.

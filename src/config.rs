@@ -483,6 +483,7 @@ impl ControlSystem {
 ///
 /// This is `optimconset`.
 pub fn optimconset(opts: ControlOptions) -> Result<ControlSystem> {
+    check_options(&opts)?;
     let out = opts.output.clone().unwrap_or_default();
 
     // --- job identity and scratch ---------------------------------------
@@ -661,9 +662,6 @@ pub fn optimconset(opts: ControlOptions) -> Result<ControlSystem> {
         .operators
         .clone()
         .ok_or_else(|| QoalaError::MissingField("operators".into()))?;
-    if operators.is_empty() {
-        return Err(QoalaError::BadValue("no control operators supplied".into()));
-    }
     let dim = operators[0].nrows();
     out.field("Dimension of systems", &int2str(dim as i64));
     out.field(
@@ -701,17 +699,12 @@ pub fn optimconset(opts: ControlOptions) -> Result<ControlSystem> {
             .clone()
             .ok_or_else(|| QoalaError::MissingField("pwr_levels".into()))?,
         kctrls,
-    )?;
+    );
     report_power_levels(&out, &pwr_levels);
 
     // --- timing ----------------------------------------------------------
     let (pulse_dt, pulse_dur, pulse_nsteps) = match &opts.pulse_dt {
         Some(dt) => {
-            if dt.iter().any(|v| *v <= 0.0) {
-                return Err(QoalaError::BadValue(
-                    "pulse_dt must be positive real numbers".into(),
-                ));
-            }
             if opts.pulse_dur.is_some() && opts.pulse_nsteps.is_some() {
                 out.warn_resolve(
                     "pulse_dur, pulse_nsteps and pulse_dt provided",
@@ -737,19 +730,15 @@ pub fn optimconset(opts: ControlOptions) -> Result<ControlSystem> {
             let n = opts
                 .pulse_nsteps
                 .ok_or_else(|| QoalaError::MissingField("pulse_nsteps or pulse_dt".into()))?;
-            if dur <= 0.0 {
-                return Err(QoalaError::BadValue("pulse_dur must be positive".into()));
-            }
-            if n == 0 {
-                return Err(QoalaError::BadValue("pulse_nsteps must be positive".into()));
-            }
             (DVector::from_element(n, dur / n as f64), dur, n)
         }
     };
 
+    // Slices agreeing to 1e-12 are one step as far as any propagator can
+    // tell; the test only has to catch a grid that is really uneven.
     let uniform = pulse_dt
         .iter()
-        .all(|v| (v - pulse_dt[0]).abs() <= 1e-15 * pulse_dt[0].abs());
+        .all(|v| (v - pulse_dt[0]).abs() <= 1e-12 * pulse_dt[0]);
     if uniform {
         out.field("Waveform slice duration grid", "uniform");
         out.field_si("Control sequence slice duration", pulse_dt[0], "s");
@@ -760,7 +749,16 @@ pub fn optimconset(opts: ControlOptions) -> Result<ControlSystem> {
             pulse_dt.iter().sum::<f64>() / pulse_dt.len() as f64,
             "s",
         );
-        out.warn("non-uniform slice duration grid not fully coded for operator splitting");
+        // The interaction propagators are built once, for the average step,
+        // while the single-spin rotations take each slice's own: the result
+        // would describe neither grid.
+        if optimcon_fun.is_qoala() {
+            return Err(QoalaError::NotImplemented(
+                "a non-uniform slice duration grid with operator splitting; \
+                 use a uniform grid or an auxiliary-matrix objective"
+                    .into(),
+            ));
+        }
     }
     out.field(
         "Number of slices in the control sequence",
@@ -1108,30 +1106,194 @@ pub fn optimconset(opts: ControlOptions) -> Result<ControlSystem> {
     Ok(sys)
 }
 
-/// Expand the supplied power levels into an `nperms x kctrls` table.
-fn build_power_levels(levels: PowerLevels, kctrls: usize) -> Result<DMatrix<f64>> {
-    match levels {
-        PowerLevels::Uniform(v) => {
-            if v <= 0.0 {
-                return Err(QoalaError::BadValue("power levels must be positive".into()));
-            }
-            Ok(DMatrix::from_element(1, kctrls, v))
+/// Refuse numbers and shapes the parser and the objective functions cannot
+/// use, before anything indexes into them.
+///
+/// Only values that are present are checked; a missing required field is
+/// reported where it is parsed.
+fn check_options(opts: &ControlOptions) -> Result<()> {
+    let positive = |what: &str, v: f64| -> Result<()> {
+        if v > 0.0 && v.is_finite() {
+            Ok(())
+        } else {
+            Err(QoalaError::BadValue(format!(
+                "{what} must be positive and finite, not {v}"
+            )))
         }
-        PowerLevels::PerChannel(v) => {
-            if v.len() != kctrls {
+    };
+
+    // Time grid; pulse_dt takes precedence over duration and step count.
+    match &opts.pulse_dt {
+        Some(dt) if dt.is_empty() => {
+            return Err(QoalaError::BadValue("pulse_dt must not be empty".into()))
+        }
+        Some(dt) => dt.iter().try_for_each(|v| positive("pulse_dt", *v))?,
+        None => {
+            if let Some(dur) = opts.pulse_dur {
+                positive("pulse_dur", dur)?;
+            }
+            if opts.pulse_nsteps == Some(0) {
+                return Err(QoalaError::BadValue("pulse_nsteps must be positive".into()));
+            }
+        }
+    }
+
+    // The RFO regularisation multiplies the Hessian by the square of
+    // reg_alpha, so a value that is not finite and positive takes the whole
+    // augmented matrix with it.
+    for (what, value) in [
+        ("reg_alpha", opts.reg_alpha),
+        ("reg_phi", opts.reg_phi),
+        ("reg_max_cond", opts.reg_max_cond),
+    ] {
+        if let Some(v) = value {
+            positive(what, v)?;
+        }
+    }
+
+    if opts.operators.as_ref().is_some_and(Vec::is_empty) {
+        return Err(QoalaError::BadValue("no control operators supplied".into()));
+    }
+    let kctrls = opts.operators.as_ref().map(Vec::len);
+
+    match &opts.pwr_levels {
+        Some(PowerLevels::Uniform(v)) => positive("pwr_levels", *v)?,
+        Some(PowerLevels::PerChannel(v)) => {
+            if let Some(k) = kctrls.filter(|k| *k != v.len()) {
                 return Err(QoalaError::Dimension(format!(
-                    "expected {kctrls} power levels, got {}",
+                    "expected {k} power levels, got {}",
                     v.len()
                 )));
             }
-            Ok(DMatrix::from_row_slice(1, kctrls, &v))
+            v.iter().try_for_each(|x| positive("pwr_levels", *x))?;
         }
-        PowerLevels::Ensemble(per_channel) => {
-            if per_channel.len() != kctrls {
+        Some(PowerLevels::Ensemble(lists)) => {
+            if let Some(k) = kctrls.filter(|k| *k != lists.len()) {
                 return Err(QoalaError::Dimension(format!(
-                    "a power level list is needed for each of the {kctrls} channels"
+                    "a power level list is needed for each of the {k} channels"
                 )));
             }
+            for (k, list) in lists.iter().enumerate() {
+                if list.is_empty() {
+                    return Err(QoalaError::BadValue(format!(
+                        "the power level list for control channel {} is empty",
+                        k + 1
+                    )));
+                }
+                list.iter().try_for_each(|x| positive("pwr_levels", *x))?;
+            }
+        }
+        None => {}
+    }
+
+    // Everything below is measured against the control operators.
+    let Some(operators) = &opts.operators else {
+        return Ok(());
+    };
+    let dim = operators[0].nrows();
+    let finite = |z: &Complex64| z.re.is_finite() && z.im.is_finite();
+    // A dim x dim matrix with nothing infinite or NaN in it.
+    let square = |what: &str, (rows, cols): (usize, usize), is_finite: bool| -> Result<()> {
+        if (rows, cols) != (dim, dim) {
+            return Err(QoalaError::Dimension(format!(
+                "{what} is {rows}x{cols}, but the first control operator is {dim}x{dim}"
+            )));
+        }
+        if !is_finite {
+            return Err(QoalaError::BadValue(format!("{what} is not finite")));
+        }
+        Ok(())
+    };
+    let operator = |what: &str, m: &CMat| square(what, (m.nrows(), m.ncols()), m.is_finite());
+    let dense = |what: &str, m: &CDense| square(what, m.shape(), m.iter().all(finite));
+
+    for (k, op) in operators.iter().enumerate() {
+        operator(&format!("control operator {}", k + 1), op)?;
+    }
+
+    // The slice count the time grid resolves to, as far as it is given.
+    let nslices = opts
+        .pulse_dt
+        .as_ref()
+        .map(|dt| dt.len())
+        .or(opts.pulse_nsteps);
+    for d in &opts.drift_sys {
+        for (what, term) in [("drift", &d.drift), ("interaction", &d.interaction)] {
+            if let Some(TimeDependent::PerStep(steps)) = term {
+                if steps.is_empty() || nslices.is_some_and(|n| n != steps.len()) {
+                    return Err(QoalaError::Dimension(format!(
+                        "a time-dependent {what} has {} matrices; it needs one per slice",
+                        steps.len()
+                    )));
+                }
+            }
+            for m in term.iter().flat_map(TimeDependent::all) {
+                operator(what, m)?;
+            }
+        }
+        if let Some(s) = &d.singlespin {
+            operator("singlespin", s)?;
+        }
+    }
+
+    match (&opts.prop_targ, &opts.rho_init, &opts.rho_targ) {
+        (Some(targets), _, _) => {
+            if let Some(inits) = &opts.prop_init {
+                if inits.len() != targets.len() {
+                    return Err(QoalaError::BadValue(
+                        "prop_init must have the same number of propagators as prop_targ".into(),
+                    ));
+                }
+                for p in inits {
+                    dense("an initial propagator", p)?;
+                }
+            }
+            for p in targets {
+                dense("a target propagator", p)?;
+            }
+        }
+        (None, Some(inits), Some(targets)) => {
+            for (init, targ) in inits.iter().zip(targets) {
+                if init.nrows() != dim || init.shape() != targ.shape() {
+                    return Err(QoalaError::Dimension(format!(
+                        "initial state {}x{} and target state {}x{} must match each other and the {dim}-dimensional space",
+                        init.nrows(),
+                        init.ncols(),
+                        targ.nrows(),
+                        targ.ncols()
+                    )));
+                }
+                if !init.iter().chain(targ.iter()).all(finite) {
+                    return Err(QoalaError::BadValue(
+                        "initial and target states must be finite".into(),
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    if let Some(sc) = &opts.spin_control {
+        let nspins = opts.mults.as_ref().map(Vec::len).or(opts.nspins);
+        if sc.ncols() != operators.len() || nspins.is_some_and(|n| sc.nrows() != n) {
+            return Err(QoalaError::Dimension(format!(
+                "spin_control is {}x{}; it needs a row per spin and a column per control channel",
+                sc.nrows(),
+                sc.ncols()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Expand the supplied power levels into an `nperms x kctrls` table.
+///
+/// [`check_options`] has already matched them to the channels.
+fn build_power_levels(levels: PowerLevels, kctrls: usize) -> DMatrix<f64> {
+    match levels {
+        PowerLevels::Uniform(v) => DMatrix::from_element(1, kctrls, v),
+        PowerLevels::PerChannel(v) => DMatrix::from_row_slice(1, kctrls, &v),
+        PowerLevels::Ensemble(per_channel) => {
             let nperms: usize = per_channel.iter().map(|v| v.len()).product();
             let mut table = DMatrix::<f64>::zeros(nperms, kctrls);
             for (k, values) in per_channel.iter().enumerate() {
@@ -1148,7 +1310,7 @@ fn build_power_levels(levels: PowerLevels, kctrls: usize) -> Result<DMatrix<f64>
                     }
                 }
             }
-            Ok(table)
+            table
         }
     }
 }
@@ -1165,7 +1327,7 @@ fn report_power_levels(out: &Reporter, pwr: &DMatrix<f64>) {
         let col: Vec<f64> = pwr.column(k).iter().map(|v| v / two_pi).collect();
         let uniq: Vec<f64> = {
             let mut c = col.clone();
-            c.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            c.sort_by(f64::total_cmp);
             c.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
             c
         };
@@ -1958,8 +2120,7 @@ mod tests {
         let table = build_power_levels(
             PowerLevels::Ensemble(vec![vec![1.0, 2.0], vec![10.0, 20.0, 30.0]]),
             2,
-        )
-        .unwrap();
+        );
         assert_eq!(table.nrows(), 6);
         assert_eq!(table.ncols(), 2);
         let rows: Vec<(f64, f64)> = (0..6).map(|r| (table[(r, 0)], table[(r, 1)])).collect();
@@ -1978,7 +2139,7 @@ mod tests {
 
     #[test]
     fn uniform_power_broadcasts_over_channels() {
-        let t = build_power_levels(PowerLevels::Uniform(6.5), 4).unwrap();
+        let t = build_power_levels(PowerLevels::Uniform(6.5), 4);
         assert_eq!(t.shape(), (1, 4));
         assert!(t.iter().all(|v| *v == 6.5));
     }

@@ -56,7 +56,15 @@ pub fn propagate_state(
     rho: &CDense,
 ) -> Result<CDense> {
     match method {
-        PropMethod::Krylov => krylov_step(l, timestep, rho),
+        PropMethod::Krylov => {
+            let out = krylov_step(l, timestep, rho)?;
+            Ok(match space {
+                StateSpace::Liouville => out,
+                // U rho U^dagger = (U (U rho)^dagger)^dagger, so the right-hand
+                // factor is a second left action on the adjoint.
+                StateSpace::Hilbert => krylov_step(l, timestep, &out.adjoint())?.adjoint(),
+            })
+        }
         _ => {
             let p = propagator(l, timestep, method, nonzero_tol)?;
             let out = p.apply(rho)?;
@@ -78,6 +86,11 @@ pub fn propagate_state(
 /// stops when a term chops to nothing.
 pub fn expm_taylor(a_in: &CMat, nonzero_tol: f64) -> Result<CMat> {
     let mat_norm = a_in.norm_2();
+    if !mat_norm.is_finite() {
+        return Err(QoalaError::Numerical(
+            "the Taylor series for expm needs a finite input".into(),
+        ));
+    }
     let n_squarings = if mat_norm > 0.0 {
         mat_norm.log2().ceil().max(0.0) as u32
     } else {
@@ -125,6 +138,13 @@ pub fn expm_taylor(a_in: &CMat, nonzero_tol: f64) -> Result<CMat> {
 pub fn krylov_step(l: &CMat, timestep: Complex64, rho: &CDense) -> Result<CDense> {
     let mut rho = rho.clone();
     let norm_mat = l.norm_2() * timestep.norm();
+    if !norm_mat.is_finite() {
+        // `ceil().max(0.0)` would turn a NaN into zero sub-steps, and the
+        // state would come back untouched as though it had been propagated.
+        return Err(QoalaError::Numerical(
+            "krylov propagation needs a finite generator and time step".into(),
+        ));
+    }
     let nsteps = (norm_mat / 2.0).ceil().max(0.0) as usize;
 
     let scaling = norm_2_state(&rho).max(1.0);
@@ -169,10 +189,12 @@ pub fn expm_pade(a: &CDense) -> Result<CDense> {
             .fold(0.0, f64::max)
     };
 
-    let a1 = norm_1(a);
-    if !a1.is_finite() {
+    // Read off the entries, not the norm: the reduction above uses `f64::max`,
+    // which drops a NaN and leaves the norm looking perfectly finite.
+    if a.iter().any(|z| !z.re.is_finite() || !z.im.is_finite()) {
         return Err(QoalaError::Numerical("expm input is not finite".into()));
     }
+    let a1 = norm_1(a);
 
     const THETA: [f64; 5] = [
         1.495_585_217_958_292e-2,
@@ -435,5 +457,50 @@ mod tests {
         // A conjugated projector stays a projector: trace 1 and rho^2 = rho.
         assert_relative_eq!(out.trace().re, 1.0, epsilon = 1e-12);
         assert_relative_eq!((&out * &out - &out).norm(), 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn hilbert_space_krylov_conjugates_like_pade() {
+        let l = CMat::Dense(CDense::from_row_slice(
+            3,
+            3,
+            &[
+                c(1.0, 0.0), c(0.4, -0.1), c(0.0, 0.0),
+                c(0.4, 0.1), c(-2.0, 0.0), c(0.7, 0.0),
+                c(0.0, 0.0), c(0.7, 0.0), c(3.0, 0.0),
+            ],
+        ));
+        // A pure state that does not commute with L, so U rho and U rho U^dagger differ.
+        let psi = CDense::from_column_slice(3, 1, &[c(0.6, 0.0), c(0.0, 0.8), c(0.0, 0.0)]);
+        let rho = &psi * psi.adjoint();
+        let dt = Complex64::new(0.9, 0.0);
+        let krylov = propagate_state(StateSpace::Hilbert, &l, dt, PropMethod::Krylov, 1e-14, &rho).unwrap();
+        let pade = propagate_state(StateSpace::Hilbert, &l, dt, PropMethod::Pade, 1e-14, &rho).unwrap();
+        assert_relative_eq!((&krylov - &pade).norm(), 0.0, epsilon = 1e-10);
+        assert_relative_eq!(krylov.trace().re, 1.0, epsilon = 1e-12);
+        assert_relative_eq!((&krylov * &krylov).trace().re, 1.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn a_generator_that_is_not_finite_is_rejected_rather_than_ignored() {
+        let nan = CDense::from_row_slice(
+            2,
+            2,
+            &[c(f64::NAN, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)],
+        );
+        assert!(expm_pade(&nan).is_err());
+
+        let l = CMat::Dense(nan);
+        let dt = Complex64::new(0.1, 0.0);
+        assert!(expm_taylor(&l, 1e-14).is_err());
+        assert!(propagator(&l, dt, PropMethod::Pade, 1e-14).is_err());
+        assert!(propagator(&l, dt, PropMethod::Taylor, 1e-14).is_err());
+
+        // Without the check this hands the state straight back, which reads
+        // as a successful propagation.
+        let rho = CDense::from_column_slice(2, 1, &[c(1.0, 0.0), c(0.0, 0.0)]);
+        assert!(krylov_step(&l, dt, &rho).is_err());
     }
 }

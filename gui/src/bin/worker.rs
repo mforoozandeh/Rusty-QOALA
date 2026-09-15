@@ -46,13 +46,13 @@ fn main() {
                 return;
             };
             match problem::Problem::from_json(&text) {
-                Some(problem) => {
+                Ok(problem) => {
                     let mut sink = PostSink {
                         scope: handler_scope.clone(),
                     };
                     run::run_to_sink(&problem, &mut sink);
                 }
-                None => reply(&run::RunMessage::Failed("unreadable problem".into())),
+                Err(e) => reply(&run::RunMessage::Failed(format!("unreadable problem: {e}"))),
             }
         });
 

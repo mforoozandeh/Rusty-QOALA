@@ -106,13 +106,21 @@ explicitly rather than pretending.
   would differ at every slice, and the MATLAB's cache layout cannot express
   that. Rejected with a clear error; time-dependent drifts work fine with the
   auxiliary-matrix objective.
+- **Non-uniform time grids with operator splitting.** `optimconset.m` warns
+  that this is not fully coded and carries on: the interaction propagators are
+  built for the average slice while the single-spin rotations use each
+  slice's own, so the result describes neither grid. Rejected here. The
+  auxiliary-matrix objectives use every slice's own duration and accept any
+  grid.
 - **The cavity response.** `optimconset.m` parses `cavity_decay_rate`,
   `cavity_function` and `cavity_n_interp`, but no objective function applies
   them. The fields are accepted and reported, with a warning, and
   `cavity_n_interp` still feeds the memory estimate.
 - **Ensembles.** The parser handles an ensemble of drift systems and the
   reports are written for it, but `optimfun_grape_xy` errors out on more than
-  one member. Same here.
+  one member. Same here, and the cost function likewise refuses more than one
+  row of power levels, or more than one initial and target state, rather than
+  optimising the first and ignoring the rest.
 - **`adapt_method = 'exact'` roll-back.** After the ladder walk, the MATLAB
   leaves the splitting parameters where the walk ended but hands the gradient
   the trajectories stored from the *previous* rung. This port keeps the
@@ -204,7 +212,10 @@ These do not change any number, only how the code is shaped.
   traffic.
 - **Propagator caching is a binary file.** `prop_cache = 'store'` writes
   `scratch/<job_id>/prop_t<q>o<p>.bin` in a small format defined in
-  `splittings.rs`, in place of MATLAB's `-v7.3` MAT files.
+  `splittings.rs`, in place of MATLAB's `-v7.3` MAT files. The file also
+  records the time step, interaction, propagation method and cutoff it was
+  built from, and is rebuilt when any of them differ, so an inherited `job_id`
+  cannot hand one problem another's propagators.
 - **Plots become CSV.** The example scripts finish with `figure`, `stairs` and
   `exportgraphics`. There is no equivalent, so the examples write waveforms and
   convergence tables as CSV.

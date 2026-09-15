@@ -231,7 +231,6 @@ pub fn objective(
         }
     };
 
-    data.fx_sep_pen = fidelities.clone();
     let fx = fidelities[0] - fidelities[1..].iter().sum::<f64>();
 
     let grad = grads.map(|g| combine(&g, rows, cols));
@@ -242,6 +241,24 @@ pub fn objective(
         }
         acc
     });
+
+    // Stop at the point that produced it: a non-finite value would otherwise
+    // travel on into the line search and the Hessian regularisation, where
+    // comparisons against it quietly take the wrong branch.
+    let finite = |m: &DMatrix<f64>| m.iter().all(|v| v.is_finite());
+    if !fx.is_finite()
+        || grad
+            .as_ref()
+            .is_some_and(|g| g.iter().any(|v| !v.is_finite()))
+        || hess.as_ref().is_some_and(|h| !finite(h))
+    {
+        return Err(QoalaError::Numerical(
+            "the objective function returned a value, gradient or Hessian that is not finite"
+                .into(),
+        ));
+    }
+
+    data.fx_sep_pen = fidelities.clone();
 
     // Timers.
     data.accumulate_timer(2, started.elapsed().as_secs_f64());

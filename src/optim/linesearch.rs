@@ -83,6 +83,15 @@ pub fn fmaxlinesearch(
         });
     }
 
+    // Every trial overwrites the diagnostics.  If none is accepted the
+    // optimiser stays at x0, so they must go back to describing x0, which is
+    // where the previous evaluation left them.
+    let at_x0 = (
+        data.fx_sep_pen.clone(),
+        data.fx_chk,
+        std::mem::take(&mut data.traj_data),
+    );
+
     let eval = objective(
         &(x0 + dir * alpha),
         cost,
@@ -111,6 +120,9 @@ pub fn fmaxlinesearch(
 
     for (d, was) in sys.drift_sys.iter_mut().zip(saved) {
         d.adapt = was;
+    }
+    if matches!(outcome, Ok(LineSearch { alpha: None, .. })) {
+        (data.fx_sep_pen, data.fx_chk, data.traj_data) = at_x0;
     }
     outcome
 }

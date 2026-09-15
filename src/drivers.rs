@@ -40,21 +40,25 @@ impl GrapeXyCost {
                 "drift ensembles with more than one member".into(),
             ));
         }
+        if sys.pwr_levels.nrows() != 1 {
+            return Err(QoalaError::NotImplemented(
+                "power-level ensembles with more than one member".into(),
+            ));
+        }
         let ctrls = if objfun.is_qoala() {
             Controls::Pauli(&sys.pauli_operators)
         } else {
             Controls::Composite(&sys.operators)
         };
         let amps = sys.power_row(0);
-        let init = sys
-            .initials
-            .first()
-            .ok_or_else(|| QoalaError::MissingField("initial state".into()))?;
-        let targ = sys
-            .targets
-            .first()
-            .ok_or_else(|| QoalaError::MissingField("target state".into()))?;
-        Ok((ctrls, amps, init, targ))
+        match (sys.initials.as_slice(), sys.targets.as_slice()) {
+            ([init], [targ]) => Ok((ctrls, amps, init, targ)),
+            ([], _) => Err(QoalaError::MissingField("initial state".into())),
+            (_, []) => Err(QoalaError::MissingField("target state".into())),
+            _ => Err(QoalaError::NotImplemented(
+                "more than one initial and target state or propagator".into(),
+            )),
+        }
     }
 }
 
@@ -316,11 +320,7 @@ pub fn state_transfer_system(spec: &StateTransfer) -> Result<(ControlSystem, DMa
     opts.rho_init = Some(vec![init]);
     opts.rho_targ = Some(vec![targ]);
 
-    let guess = spec
-        .init_pulse
-        .clone()
-        .unwrap_or_else(|| random_pulse(spec.increments, 2 * npairs, spec.seed));
-
+    let guess = starting_pulse(&spec.init_pulse, spec.increments, npairs, spec.seed)?;
     Ok((optimconset(opts)?, guess))
 }
 
@@ -386,12 +386,30 @@ pub fn gate_synthesis_system(spec: &GateSynthesis) -> Result<(ControlSystem, DMa
     opts.prop_targ = Some(vec![spec.target.clone()]);
     opts.auxmat_method = Some(PropMethod::Taylor);
 
-    let guess = spec
-        .init_pulse
-        .clone()
-        .unwrap_or_else(|| random_pulse(spec.increments, 2 * npairs, spec.seed));
-
+    let guess = starting_pulse(&spec.init_pulse, spec.increments, npairs, spec.seed)?;
     Ok((optimconset(opts)?, guess))
+}
+
+/// The supplied starting waveform, checked against `increments x 2*npairs`,
+/// or a random one of that shape.
+fn starting_pulse(
+    init_pulse: &Option<DMatrix<f64>>,
+    increments: usize,
+    npairs: usize,
+    seed: Option<u64>,
+) -> Result<DMatrix<f64>> {
+    let shape = (increments, 2 * npairs);
+    match init_pulse {
+        Some(p) if p.shape() != shape => Err(QoalaError::Dimension(format!(
+            "init_pulse is {}x{} but the pulse has {} slices and {} channels",
+            p.nrows(),
+            p.ncols(),
+            shape.0,
+            shape.1
+        ))),
+        Some(p) => Ok(p.clone()),
+        None => Ok(random_pulse(shape.0, shape.1, seed)),
+    }
 }
 
 /// Options common to both drivers.

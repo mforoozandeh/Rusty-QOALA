@@ -46,14 +46,26 @@ pub enum Problem {
 }
 
 impl Problem {
-    /// Read a problem from JSON.
+    /// Read a problem from JSON, refusing a QOALA setup whose arrays do not
+    /// match its counts.
     ///
     /// Links, stored sessions and exported files from before ESCALADE hold a
     /// bare QOALA [`Setup`]; those still load.
-    pub fn from_json(json: &str) -> Option<Problem> {
-        serde_json::from_str::<Problem>(json)
-            .ok()
-            .or_else(|| serde_json::from_str::<Setup>(json).ok().map(Problem::Qoala))
+    pub fn from_json(json: &str) -> Result<Problem, String> {
+        let problem = serde_json::from_str::<Problem>(json)
+            .or_else(|e| {
+                serde_json::from_str::<Setup>(json)
+                    .map(Problem::Qoala)
+                    .map_err(|_| e)
+            })
+            .map_err(|e| format!("not a readable setup: {e}"))?;
+        if let Problem::Qoala(setup) = &problem {
+            let shape = setup.shape_problems();
+            if !shape.is_empty() {
+                return Err(shape.join("; "));
+            }
+        }
+        Ok(problem)
     }
 
     /// Which algorithm this is for.
@@ -130,7 +142,7 @@ mod tests {
     fn both_kinds_survive_json() {
         for problem in presets::every() {
             let json = serde_json::to_string(&problem).unwrap();
-            assert_eq!(Problem::from_json(&json), Some(problem));
+            assert_eq!(Problem::from_json(&json), Ok(problem));
         }
     }
 
@@ -139,7 +151,31 @@ mod tests {
     fn a_legacy_setup_still_loads() {
         let setup = presets::default_setup();
         let json = serde_json::to_string(&setup).unwrap();
-        assert_eq!(Problem::from_json(&json), Some(Problem::Qoala(setup)));
-        assert_eq!(Problem::from_json("not json"), None);
+        assert_eq!(Problem::from_json(&json), Ok(Problem::Qoala(setup)));
+        assert!(Problem::from_json("not json").is_err());
+    }
+
+    #[test]
+    fn a_setup_whose_arrays_do_not_match_its_counts_is_refused() {
+        type Spoil = fn(&mut Setup);
+        let cases: [(&str, Spoil); 6] = [
+            ("spin_control", |s| s.spin_control.truncate(1)),
+            ("a spin_control row", |s| s.spin_control[0].clear()),
+            ("couplings", |s| s.couplings.clear()),
+            ("offsets_hz", |s| s.offsets_hz.truncate(1)),
+            ("amplitudes_hz", |s| s.amplitudes_hz.clear()),
+            ("nspins", |s| s.nspins = 64),
+        ];
+        for (what, spoil) in cases {
+            let mut setup = presets::default_setup();
+            spoil(&mut setup);
+            assert!(!setup.problems().is_empty(), "{what}: no problem reported");
+            for json in [
+                serde_json::to_string(&setup).unwrap(),
+                serde_json::to_string(&Problem::Qoala(setup.clone())).unwrap(),
+            ] {
+                assert!(Problem::from_json(&json).is_err(), "{what}: loaded anyway");
+            }
+        }
     }
 }
