@@ -1,5 +1,9 @@
 # Hosting the QOALA web application
 
+The application is already hosted at <https://rusty-qoala.pages.dev>, on
+Cloudflare Pages. `.github/workflows/deploy.yml` builds and publishes it on
+every push to `main`. This page is for hosting a copy of your own.
+
 The build in `gui/dist` is static files. It needs no server-side anything: no
 database, no functions, no accounts. Copy it somewhere that serves files and
 it works.

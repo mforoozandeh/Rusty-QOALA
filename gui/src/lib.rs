@@ -1,9 +1,10 @@
 //! QOALA and ESCALADE in a window, or in a browser tab.
 //!
-//! `cargo run -p qoala-gui` gives the desktop application; `trunk serve` in
-//! this directory gives the web one.  Same source both ways - the only
-//! platform-specific code is in [`platform`], the two `runner` modules, and
-//! the file-download helper in [`export`].
+//! `cargo run -p qoala-gui` gives the desktop application; `trunk serve
+//! --config gui/Trunk.toml` from the repository root gives the web one, which
+//! is hosted at <https://rusty-qoala.pages.dev>.  Same source both ways - the
+//! only platform-specific code is in [`platform`], the two `runner` modules,
+//! and the file-download helper in [`export`].
 //!
 //! The crate is a library with two binaries on top: `qoala-gui` is the
 //! interface, and `qoala-worker` is the WebAssembly Web Worker the browser

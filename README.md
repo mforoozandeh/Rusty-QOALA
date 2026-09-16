@@ -9,6 +9,10 @@
 Rust port of the QOALA MATLAB package by M. Foroozandeh, D. L. Goodwin and
 P. Singh.
 
+**Try it in your browser: <https://rusty-qoala.pages.dev>** - QOALA and
+ESCALADE with presets and live plots, nothing to install. Everything runs on
+your machine; nothing is uploaded.
+
 QOALA is a GRAPE optimal-control package for coupled two-level systems. Its
 idea is that most of the work in a pulse optimisation is wasted: early
 iterations are nowhere near the optimum, so propagating the system to machine
@@ -37,8 +41,8 @@ which is how a pulse is made robust to B1 inhomogeneity. See
 qoala = "1.1"
 ```
 
-There is also a graphical front end - the same code as a desktop application
-or as a web page that runs entirely in the browser. See
+There is also a graphical front end: open it at
+<https://rusty-qoala.pages.dev>, or run it as a desktop application. See
 [The application](#the-application).
 
 Or from git, until it is published:
@@ -237,25 +241,31 @@ deploy/           cross-origin isolation headers, one file per host
 target, watch it converge, take the pulse away as a file. It runs two ways
 from one source.
 
-**Desktop.**
+**In the browser: <https://rusty-qoala.pages.dev>.** Nothing to install.
+Everything runs in your browser - there is no server, no account and no
+upload - on one core.
+
+**On the desktop.** Faster for large ESCALADE runs, which it spreads over
+every core, and the only way to run four-spin QOALA systems:
 
 ```bash
 cargo run -p qoala-gui --release
 ```
 
-**Browser.** Everything runs in the visitor's browser. There is no server, no
-account and no upload; hosting is static files.
+**Building the web version yourself.** Only needed to try out changes to the
+application, or to host a copy of your own. `trunk serve` builds it and serves
+it at <http://localhost:8080>:
 
 ```bash
 cargo install --locked trunk
 trunk serve --config gui/Trunk.toml
 ```
 
-Then open <http://localhost:8080>.
-
-To build for deployment, `trunk build --release --config gui/Trunk.toml` and
-serve `gui/dist` from anywhere - including `python3 -m http.server`. See
-[`deploy/README.md`](deploy/README.md).
+`trunk build --release --config gui/Trunk.toml` writes the static files to
+`gui/dist`, which any file server can host - including
+`python3 -m http.server`. See [`deploy/README.md`](deploy/README.md). The copy
+at rusty-qoala.pages.dev is built and published that way by
+`.github/workflows/deploy.yml` on every push to `main`.
 
 What it gives you:
 
