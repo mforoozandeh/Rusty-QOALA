@@ -20,11 +20,18 @@
 //! its target fidelity, usually long before its iteration budget, so for it
 //! the estimate is an upper bound: see [`is_upper_bound`].
 //!
-//! The constants were measured with `cargo run -p qoala-gui --release
-//! --example calibrate` on an Apple-silicon laptop, against the shipped
-//! presets.  Treat the answer as an order of magnitude, not a stopwatch.
+//! The constants are for one core.  Natively an ESCALADE run is spread over
+//! rayon's threads, one per core unless `RAYON_NUM_THREADS` says otherwise,
+//! so its estimate there is divided by what those threads are worth: see
+//! [`ESCALADE_CORE_EFFICIENCY`].  In the browser everything runs on one core.
+//!
+//! The constants were measured with `RAYON_NUM_THREADS=1 cargo run -p
+//! qoala-gui --release --example calibrate` on an Apple-silicon laptop,
+//! against the shipped presets.  Treat the answer as an order of magnitude,
+//! not a stopwatch.
 
 use crate::escalade::EscaladeSetup;
+use crate::platform::Platform;
 use crate::problem::Problem;
 use crate::setup::{Setup, Target};
 
@@ -52,7 +59,14 @@ const ESCALADE_HESSIAN_COEFFICIENT: f64 = 1.1e-8;
 /// Rough allowance for WebAssembly being slower than native code.
 pub const WEB_SLOWDOWN: f64 = 2.5;
 
-/// Roughly how long `problem` will take to run natively, in seconds.
+/// How much of each core a native ESCALADE run turns into speed.  On an idle
+/// 12-core Apple M2 Max, 8 of them performance cores, the B1-compensated
+/// preset ran 8 times faster than on one core.  Rounded down from 0.67, which
+/// suits an estimate that ESCALADE shows as an upper bound.
+pub const ESCALADE_CORE_EFFICIENCY: f64 = 0.6;
+
+/// Roughly how long `problem` would take to run natively on one core, in
+/// seconds.
 pub fn estimate_seconds(problem: &Problem) -> f64 {
     match problem {
         Problem::Qoala(setup) => qoala_seconds(setup),
@@ -60,10 +74,20 @@ pub fn estimate_seconds(problem: &Problem) -> f64 {
     }
 }
 
-/// As [`estimate_seconds`], with the WebAssembly allowance applied when
-/// `is_web`.
-pub fn estimate_seconds_on(problem: &Problem, is_web: bool) -> f64 {
-    estimate_seconds(problem) * if is_web { WEB_SLOWDOWN } else { 1.0 }
+/// Roughly how long `problem` will take on `platform`: with the WebAssembly
+/// allowance in the browser, and with ESCALADE spread over the platform's
+/// cores natively.
+pub fn estimate_seconds_on(problem: &Problem, platform: Platform) -> f64 {
+    let one_core = estimate_seconds(problem);
+    if platform.is_web {
+        return one_core * WEB_SLOWDOWN;
+    }
+    match problem {
+        Problem::Qoala(_) => one_core,
+        Problem::Escalade(_) => {
+            one_core / (platform.cores as f64 * ESCALADE_CORE_EFFICIENCY).max(1.0)
+        }
+    }
 }
 
 /// Whether the estimate is the most a run can take rather than what it will
@@ -134,7 +158,41 @@ mod tests {
         assert!(q(&more_spins) > 3.0 * baseline);
 
         let problem = Problem::Qoala(base);
-        assert!(estimate_seconds_on(&problem, true) > estimate_seconds_on(&problem, false));
+        assert!(estimate_seconds_on(&problem, web()) > estimate_seconds_on(&problem, native(1)));
+    }
+
+    fn web() -> Platform {
+        Platform {
+            is_web: true,
+            cores: 1,
+        }
+    }
+
+    fn native(cores: usize) -> Platform {
+        Platform {
+            is_web: false,
+            cores,
+        }
+    }
+
+    /// Only ESCALADE is spread over cores, and only natively.
+    #[test]
+    fn cores_speed_up_escalade_on_the_desktop_only() {
+        let escalade = Problem::Escalade(presets::escalade_b1_compensated());
+        let one_core = estimate_seconds(&escalade);
+        assert_eq!(estimate_seconds_on(&escalade, native(1)), one_core);
+        let twelve = estimate_seconds_on(&escalade, native(12));
+        assert!((one_core / twelve - 12.0 * ESCALADE_CORE_EFFICIENCY).abs() < 1e-9);
+        assert_eq!(
+            estimate_seconds_on(&escalade, web()),
+            one_core * WEB_SLOWDOWN
+        );
+
+        let qoala = Problem::Qoala(presets::default_setup());
+        assert_eq!(
+            estimate_seconds_on(&qoala, native(12)),
+            estimate_seconds(&qoala)
+        );
     }
 
     /// A gate costs more than a transfer of the same size, and the gap grows
@@ -187,7 +245,8 @@ mod tests {
 
     /// The constants are a fit to measurements, so the presets they were
     /// fitted against must come back near what was measured.  The numbers on
-    /// the right are from `--example calibrate` at 20 iterations.
+    /// the right are from `--example calibrate` at 20 iterations, on one
+    /// core.
     #[test]
     fn the_presets_land_near_their_measured_times() {
         let measured = [

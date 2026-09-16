@@ -1,5 +1,6 @@
 # Cloudflare Pages and Netlify read this file from the root of the published
-# directory.  Cross-origin isolation is optional - see deploy/README.md.
+# directory.  Cross-origin isolation is optional and does not make the
+# current build faster - see deploy/README.md.
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp

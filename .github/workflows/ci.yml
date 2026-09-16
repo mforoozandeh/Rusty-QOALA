@@ -28,6 +28,9 @@ jobs:
         run: cargo build --all-targets
       - name: Test
         run: cargo test --release
+      # The sequential fallback is otherwise only compiled, for wasm32.
+      - name: Test without the parallel feature
+        run: cargo test --release --lib --no-default-features
       - name: Doc tests
         run: cargo test --release --doc
 
@@ -130,3 +133,6 @@ jobs:
         run: cargo run --release --example paper_benchmarks -- state-2spin-hetero --runs 2 --iters 20
       - name: ESCALADE, with and without the Hessian
         run: cargo run --release --example escalade_grad_vs_hess
+      # Fails unless one thread and every thread give identical results.
+      - name: ESCALADE, one thread against all of them
+        run: cargo run --release --example escalade_parallel -- --iters 20

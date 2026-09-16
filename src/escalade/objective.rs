@@ -19,14 +19,45 @@
 //! The sign is the MATLAB's: `fmincon` minimises, so a perfect transfer has a
 //! value of minus one.
 //!
-//! The MATLAB `parfor` over fields becomes a plain loop.  Each spin is a
-//! handful of 2x2 products per slice, and `wasm32` has no threads.
+//! Where the MATLAB's `parfor` runs the fields in parallel and each field's
+//! spins in one vectorised block, here every (field, spin) pair is a work
+//! item.  The items, field-major, are cut into contiguous pieces; each piece
+//! sums its items in order, and with the `parallel` feature each piece is a
+//! rayon task.  Each work item is still a time-ordered product over the pulse;
+//! it is the work items that are independent.
+//!
+//! Every piece carries its own accumulator, which for a Hessian is a dense
+//! `2N x 2N` matrix, so long pulses are cut into fewer pieces, keeping the
+//! accumulators within 256 MB together.  The grouping depends on the number
+//! of fields, spins and pulse points and on the order asked for, never on the
+//! thread count, so the result does not either (see the crate documentation).
+//! Past a few hundred points a Hessian evaluation is grouped differently from
+//! a value or gradient evaluation, and the value it returns can differ from
+//! theirs in the last digit.
 
 use super::propagators::{slice, trajectory, Op2, Slice};
 use super::settings::Settings;
 use crate::error::{QoalaError, Result};
 use crate::optim::ObjectiveRequest;
+use crate::parallel;
 use nalgebra::{DMatrix, DVector};
+
+/// Most pieces one evaluation is cut into: enough to spread the work items
+/// evenly over any ordinary machine.
+const MAX_PIECES: usize = 64;
+
+/// Most memory, in bytes, that the accumulators of one evaluation's pieces may
+/// take together.
+///
+/// A Hessian accumulator is dense: 8 MB at 500 pulse points, 32 MB at 1000,
+/// 800 MB at 5000.  Under this budget a Hessian is cut into 64 pieces up to
+/// about 360 points, 8 at 1000, and one - no more than a sequential loop
+/// needs - from about 2050.  Few pieces cost little speed at that size: the
+/// threads are by then contending for memory bandwidth rather than for work.
+/// On a 12-core machine a 1000-point Hessian over 561 work items (51 spins
+/// x 11 fields) took 0.75 s in 8 pieces and 0.71 s in 32, which needed 780 MB
+/// against 270 MB.
+const ACCUMULATOR_BUDGET: usize = 256 << 20;
 
 /// What one evaluation produced.
 #[derive(Debug, Clone)]
@@ -53,54 +84,98 @@ pub fn gradhess(
             pulse.ncols()
         )));
     }
-    let want_grad = request != ObjectiveRequest::Value;
-    let want_hess = request == ObjectiveRequest::Hessian;
+    let nspins = settings.nspins;
+    Ok(parallel::fold(
+        settings.rf.len() * nspins,
+        pieces(n, request),
+        || Evaluation::zeros(n, request),
+        |acc, task| add_spin(acc, settings, pulse, request, task / nspins, task % nspins),
+        Evaluation::absorb,
+    ))
+}
 
-    let mut value = 0.0;
-    let mut grad = want_grad.then(|| DVector::<f64>::zeros(2 * n));
-    let mut hess = want_hess.then(|| DMatrix::<f64>::zeros(2 * n, 2 * n));
+/// How many pieces an evaluation of `request` over `n` pulse points is cut
+/// into: as many as [`ACCUMULATOR_BUDGET`] allows, from one to
+/// [`MAX_PIECES`].
+fn pieces(n: usize, request: ObjectiveRequest) -> usize {
+    let linear = 1usize.saturating_add(2usize.saturating_mul(n));
+    let entries = match request {
+        ObjectiveRequest::Value => 1,
+        ObjectiveRequest::Gradient => linear,
+        ObjectiveRequest::Hessian => {
+            linear.saturating_add(4usize.saturating_mul(n).saturating_mul(n))
+        }
+    };
+    let bytes = entries.saturating_mul(std::mem::size_of::<f64>());
+    (ACCUMULATOR_BUDGET / bytes).clamp(1, MAX_PIECES)
+}
 
-    let two_pi = 2.0 * std::f64::consts::PI;
-    let mut slices: Vec<Slice> = Vec::with_capacity(n);
-
-    for (&rf, &w) in settings.rf.iter().zip(&settings.rf_weights) {
-        let omega1 = two_pi * rf;
-        for p in 0..settings.nspins {
-            slices.clear();
-            slices.extend((0..n).map(|k| {
-                slice(
-                    settings.dt,
-                    omega1,
-                    pulse[(k, 0)],
-                    pulse[(k, 1)],
-                    settings.offsets[p],
-                    request,
-                )
-            }));
-            let traj = trajectory(&slices);
-
-            let ut = traj.total;
-            let r0 = settings.initial[p];
-            let rtc = settings.target[p].adjoint();
-            let rt = ut * r0 * ut.adjoint();
-            let rr = rt * rtc;
-
-            value -= w * (rtc * rt).trace().re;
-
-            if let Some(gr) = grad.as_mut() {
-                for (k, [llf, llg]) in traj.first.iter().enumerate() {
-                    gr[k] -= 2.0 * w * (llf * rr).trace().im;
-                    gr[n + k] -= 2.0 * w * (llg * rr).trace().im;
-                }
-            }
-
-            if let Some(h) = hess.as_mut() {
-                hessian_terms(h, &traj.first, &traj.second, &rt, &rr, &rtc, w);
-            }
+impl Evaluation {
+    /// Nothing yet, with room for what `request` asks for.
+    fn zeros(n: usize, request: ObjectiveRequest) -> Self {
+        Evaluation {
+            value: 0.0,
+            grad: (request != ObjectiveRequest::Value).then(|| DVector::zeros(2 * n)),
+            hess: (request == ObjectiveRequest::Hessian).then(|| DMatrix::zeros(2 * n, 2 * n)),
         }
     }
 
-    Ok(Evaluation { value, grad, hess })
+    /// Add `other`, which was started with the same request.
+    fn absorb(&mut self, other: Evaluation) {
+        self.value += other.value;
+        if let (Some(g), Some(o)) = (self.grad.as_mut(), other.grad) {
+            *g += o;
+        }
+        if let (Some(h), Some(o)) = (self.hess.as_mut(), other.hess) {
+            *h += o;
+        }
+    }
+}
+
+/// Add spin `p`'s contribution at field `r`.
+fn add_spin(
+    acc: &mut Evaluation,
+    settings: &Settings,
+    pulse: &DMatrix<f64>,
+    request: ObjectiveRequest,
+    r: usize,
+    p: usize,
+) {
+    let n = settings.np_pulse;
+    let omega1 = 2.0 * std::f64::consts::PI * settings.rf[r];
+    let w = settings.rf_weights[r];
+    let slices: Vec<Slice> = (0..n)
+        .map(|k| {
+            slice(
+                settings.dt,
+                omega1,
+                pulse[(k, 0)],
+                pulse[(k, 1)],
+                settings.offsets[p],
+                request,
+            )
+        })
+        .collect();
+    let traj = trajectory(&slices);
+
+    let ut = traj.total;
+    let r0 = settings.initial[p];
+    let rtc = settings.target[p].adjoint();
+    let rt = ut * r0 * ut.adjoint();
+    let rr = rt * rtc;
+
+    acc.value -= w * (rtc * rt).trace().re;
+
+    if let Some(gr) = acc.grad.as_mut() {
+        for (k, [llf, llg]) in traj.first.iter().enumerate() {
+            gr[k] -= 2.0 * w * (llf * rr).trace().im;
+            gr[n + k] -= 2.0 * w * (llg * rr).trace().im;
+        }
+    }
+
+    if let Some(h) = acc.hess.as_mut() {
+        hessian_terms(h, &traj.first, &traj.second, &rt, &rr, &rtc, w);
+    }
 }
 
 /// Add one spin's contribution to the Hessian.
@@ -220,10 +295,60 @@ mod tests {
                 );
             }
         }
-        // The same value and gradient come back whatever order is asked for.
+        // The same value and gradient come back whatever order is asked for:
+        // a pulse this short is cut into the same pieces at every order.
         let lower = gradhess(&s, &p, ObjectiveRequest::Gradient).unwrap();
         assert_eq!(eval.value, lower.value);
         assert_eq!(eval.grad.unwrap(), lower.grad.unwrap());
+    }
+
+    /// Long pulses are cut into fewer pieces, keeping their accumulators
+    /// within budget; short ones, and anything without a Hessian, get them all.
+    #[test]
+    fn the_piece_count_keeps_to_the_memory_budget() {
+        use ObjectiveRequest::{Gradient, Hessian, Value};
+        assert_eq!(pieces(50, Hessian), MAX_PIECES);
+        assert_eq!(pieces(1000, Hessian), 8);
+        assert_eq!(pieces(361, Hessian), MAX_PIECES);
+        assert_eq!(pieces(362, Hessian), MAX_PIECES - 1);
+        assert_eq!(pieces(2047, Hessian), 2);
+        assert_eq!(pieces(2048, Hessian), 1);
+        assert_eq!(pieces(5000, Hessian), 1);
+        assert_eq!(pieces(usize::MAX, Hessian), 1);
+        assert_eq!(pieces(usize::MAX, Gradient), 1);
+        for n in [1, 50, 5000] {
+            assert_eq!(pieces(n, Value), MAX_PIECES);
+            assert_eq!(pieces(n, Gradient), MAX_PIECES);
+        }
+        for n in [100, 361, 362, 500, 700, 1000, 2047, 2048] {
+            let p = pieces(n, Hessian);
+            let bytes = 8 * (1 + 2 * n + 4 * n * n);
+            assert!(
+                p == 1 || p * bytes <= ACCUMULATOR_BUDGET,
+                "{n} points, {p} pieces"
+            );
+        }
+    }
+
+    /// Spreading the work items over threads changes nothing, to the last bit.
+    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+    #[test]
+    fn the_thread_count_does_not_change_the_evaluation() {
+        let (s, p) = small();
+        let on = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| gradhess(&s, &p, ObjectiveRequest::Hessian).unwrap())
+        };
+        let one = on(1);
+        for threads in [2, 5] {
+            let many = on(threads);
+            assert_eq!(one.value.to_bits(), many.value.to_bits());
+            assert_eq!(one.grad, many.grad);
+            assert_eq!(one.hess, many.hess);
+        }
     }
 
     /// A pulse that does nothing leaves z-magnetisation where it is, which

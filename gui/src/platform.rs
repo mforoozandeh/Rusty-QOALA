@@ -11,31 +11,26 @@ use crate::problem::Problem;
 pub struct Platform {
     /// Running in a browser rather than as a desktop application.
     pub is_web: bool,
-    /// `crossOriginIsolated`: whether `SharedArrayBuffer` and therefore
-    /// multi-core WebAssembly are available.  Always false natively, where it
-    /// means nothing.
-    pub cross_origin_isolated: bool,
+    /// Threads an ESCALADE run is spread over.  Natively that is the size of
+    /// rayon's pool: one per core unless `RAYON_NUM_THREADS` says otherwise.
+    /// In the browser it is one, cross-origin isolated or not: the
+    /// WebAssembly build has no threads.  QOALA runs on one core everywhere.
+    pub cores: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn detect() -> Platform {
     Platform {
         is_web: false,
-        cross_origin_isolated: false,
+        cores: rayon::current_num_threads(),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn detect() -> Platform {
-    use wasm_bindgen::JsCast;
-    let isolated = web_sys::window()
-        .and_then(|w| js_sys::Reflect::get(&w, &"crossOriginIsolated".into()).ok())
-        .and_then(|v| v.dyn_into::<js_sys::Boolean>().ok())
-        .map(|b| b.value_of())
-        .unwrap_or(false);
     Platform {
         is_web: true,
-        cross_origin_isolated: isolated,
+        cores: 1,
     }
 }
 

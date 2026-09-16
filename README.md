@@ -137,6 +137,7 @@ println!("{:.4} after {} iterations", optimised.fidelity, optimised.counters.ite
 ```text
 cargo run --release --example escalade_grad_vs_hess   # Hessian against gradient only
 cargo run --release --example escalade_b1             # B1-sensitive against B1-compensated
+cargo run --release --example escalade_parallel       # one thread against every core
 ```
 
 These port the two scripts in the MATLAB's `test_runs/`. On the first, both
@@ -147,6 +148,32 @@ worst-case fidelity across that range from 0.84 to 0.95.
 
 `escalade::profile` computes the offset profile, the B1 map and the phase
 sensitivity of any pulse, from the same propagators the optimiser uses.
+
+**Threads.** One spin at one field - a work item - is a time-ordered product
+over the pulse, but the work items are independent of each other. The `parallel` feature, on by
+default, spreads them over [rayon](https://docs.rs/rayon)'s thread pool - one
+thread per core, or `RAYON_NUM_THREADS`. Where that applies:
+
+- **Library and command line, native** - on every core by default.
+  `default-features = false` in a dependency, or `--no-default-features` in
+  this repository, drops rayon and runs on one core.
+- **Desktop application** (`cargo run -p qoala-gui --release`) - on every
+  core.
+- **Browser application** - on one core, even when the page is cross-origin
+  isolated. The WebAssembly build has no threads.
+
+Only ESCALADE is spread over cores; QOALA's coupled-spin optimisation runs on
+one core everywhere. The sums are grouped by the size of the problem and
+never by the thread count, so a run returns the same pulse to the last bit on
+one core or many. That fixed grouping has a small cost on one core: a single
+field of 51 spins runs about 5% slower there than a plain loop, since each
+spin becomes a piece with its own Hessian accumulator.
+
+`escalade_parallel` times the B1-compensated problem both ways. On an idle
+12-core Apple M2 Max (8 performance, 4 efficiency), a Hessian evaluation of
+its 1581 work items (51 spins × 31 fields) drops from 41 ms to 4.8 ms, and 200 Newton iterations from
+7.1 s to 0.9 s, with identical pulses. `escalade_b1` falls from 38 s with the
+original sequential code to 4.8 s.
 
 | MATLAB | Rust |
 |---|---|
@@ -252,11 +279,14 @@ What it gives you:
   exactly and can be sent to somebody else. Nothing is stored anywhere but
   the link and the visitor's own browser.
 
-Two limits worth knowing. Four-spin systems are dimension 256 with dense
-256x256 propagators per slice; the browser build refuses them and points at
-the desktop one. And cancelling in the browser terminates the Web Worker, so
-the convergence curve is kept but the partial waveform is not - natively,
-cancellation is cooperative and the waveform comes back.
+Three limits worth knowing. The browser build runs on one core, cross-origin
+isolated or not, while the desktop build spreads ESCALADE over every core -
+several times faster for a B1-compensated pulse. QOALA runs on one core in
+both. Four-spin systems are dimension 256 with dense 256x256 propagators per
+slice; the browser build refuses them and points at the desktop one. And
+cancelling in the browser terminates the Web Worker, so the convergence curve
+is kept but the partial waveform is not - natively, cancellation is
+cooperative and the waveform comes back.
 
 ## How the code maps to the MATLAB
 

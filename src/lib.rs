@@ -46,6 +46,17 @@
 //! * [`penalty`] - waveform penalty terms with gradients and Hessians.
 //! * [`linalg`] - the dense/sparse complex matrix type everything is built on.
 //!
+//! ## Threads
+//!
+//! With the `parallel` feature, on by default, ESCALADE evaluates each spin at
+//! each field - one work item - on [rayon](https://docs.rs/rayon)'s thread
+//! pool: one thread per core, fewer with `RAYON_NUM_THREADS` or inside a pool
+//! of the caller's own.
+//! The sums are grouped by the size of the problem, never by the thread
+//! count, so a run gives bit-for-bit the same pulse on one thread as on many,
+//! and the same as with the feature turned off.  `wasm32` has no threads and
+//! always runs sequentially.
+//!
 //! Differences from the MATLAB original are listed in `DEVIATIONS.md`.
 
 pub mod config;
@@ -60,6 +71,7 @@ pub mod gates;
 pub mod linalg;
 pub mod objfun;
 pub mod optim;
+mod parallel;
 pub mod penalty;
 pub mod prop_index;
 pub mod propagate;

@@ -33,6 +33,15 @@ rand_chacha = "0.3"
 argmin = { version = "0.11", default-features = false }
 argmin-math = { version = "0.5", default-features = false, features = ["nalgebra_v0_33"] }
 
+[features]
+default = ["parallel"]
+# Spread ESCALADE's spins and fields over rayon's thread pool.  It has no
+# effect on wasm32, which has no threads and does not get rayon at all.
+parallel = ["dep:rayon"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { version = "1.10", optional = true }
+
 # wasm32 has no monotonic clock and no OS entropy source of its own: the time
 # shim in `src/time.rs` needs `web-time`, and `rand`'s `from_entropy` needs
 # `getrandom`'s JS backend.  rand 0.8 pins getrandom 0.2, so this is the right
@@ -43,6 +52,12 @@ web-time = "1"
 
 [dev-dependencies]
 approx = "0.5"
+
+# Times the objective and a whole optimisation on one thread and on many, so
+# it needs rayon to set the thread count.
+[[example]]
+name = "escalade_parallel"
+required-features = ["parallel"]
 
 [profile.release]
 opt-level = 3

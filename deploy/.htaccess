@@ -1,5 +1,5 @@
-# Apache with mod_headers.  Cross-origin isolation is optional - see
-# deploy/README.md.
+# Apache with mod_headers.  Cross-origin isolation is optional and does not
+# make the current build faster - see deploy/README.md.
 
 <IfModule mod_headers.c>
     Header always set Cross-Origin-Opener-Policy  "same-origin"

@@ -12,14 +12,21 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 These turn on **cross-origin isolation**, which is what `SharedArrayBuffer`
-and multi-core WebAssembly need. The application checks `crossOriginIsolated`
-at startup and says which mode it is in. It works either way - isolation is a
-speed-up, never a requirement - so a host that cannot set headers is fine.
+and multi-core WebAssembly need.
 
-Note that the shipped build runs the optimisation in an ordinary Web Worker,
-which does **not** need these headers: the tab stays responsive on any host.
-The headers are here so that a future threaded build has somewhere to look,
-and so that anyone who wants them can set them.
+**They do not make the shipped build faster.** The web application runs on
+one core whether the page is cross-origin isolated or not: its WebAssembly is
+built without threads, and the optimisation runs in an ordinary Web Worker,
+which needs no special headers and keeps the tab responsive on any host. A
+host that cannot set them loses nothing.
+
+Multi-core runs are native only. The desktop application
+(`cargo run -p qoala-gui --release`) and the library on the command line
+spread ESCALADE over every core; QOALA runs on one core everywhere.
+
+The headers are here so that a future threaded web build has somewhere to
+look, and so that anyone who wants them can set them. `require-corp` blocks
+cross-origin resources that do not opt in; the application loads none.
 
 ## Pick your host
 

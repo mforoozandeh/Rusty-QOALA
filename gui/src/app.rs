@@ -305,7 +305,7 @@ impl QoalaApp {
                     self.cancel();
                 }
             } else {
-                let seconds = estimate_seconds_on(&problem, self.platform.is_web);
+                let seconds = estimate_seconds_on(&problem, self.platform);
                 let bound = if is_upper_bound(&problem) {
                     "up to"
                 } else {
@@ -347,12 +347,19 @@ impl QoalaApp {
             ui.colored_label(egui::Color32::from_rgb(200, 140, 60), format!("! {line}"));
         }
 
-        if self.platform.is_web && !self.platform.cross_origin_isolated {
-            ui.colored_label(
-                egui::Color32::from_rgb(200, 140, 60),
-                "This page is not cross-origin isolated, so the optimisation runs on one core. \
-                 It still works; larger systems are just slower.",
-            );
+        if self.algorithm == Algorithm::Escalade {
+            if self.platform.is_web {
+                ui.weak(
+                    "In the browser ESCALADE runs on one core. \
+                     The desktop application spreads its work over every core.",
+                );
+            } else {
+                let threads = self.platform.cores;
+                ui.weak(format!(
+                    "ESCALADE spreads its work over {threads} thread{} here.",
+                    if threads == 1 { "" } else { "s" }
+                ));
+            }
         }
         ui.add_space(4.0);
     }

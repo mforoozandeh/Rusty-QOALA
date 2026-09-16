@@ -171,8 +171,16 @@ stalled (`ExitFlag::StepTolerance`).
 
 - **No finite-difference mode.** `usegrad = false` asks `fmincon` to
   difference the objective itself. The analytic gradient is always used.
-- **No `parfor`.** The loop over fields is sequential: each spin is a handful
-  of 2x2 products per slice, and `wasm32` has no threads.
+- **Threads over work items, not fields.** The MATLAB's `parfor` spreads the
+  fields over workers and vectorises each field's spins. Here every
+  (field, spin) pair is a work item, the items are cut into up to 64
+  contiguous pieces, and with the `parallel` feature each piece is a rayon
+  task, so a single field is parallel too. A Hessian piece holds a dense
+  `2N x 2N` accumulator, so long pulses get fewer pieces, keeping them to
+  256 MB together. The grouping follows the problem's size and the order
+  asked for, never the thread count, so the result is the same to the last
+  bit on any number of threads and without the feature. `wasm32` has no
+  threads and runs sequentially.
 - **One objective, not two.** `gradhess_vectorized.m` is
   `gradhess_vectorized_B1_parallel.m` with a single unit-weight field, so only
   the latter is ported.

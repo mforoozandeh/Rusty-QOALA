@@ -4,6 +4,61 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **ESCALADE runs on every core.** With the new `parallel` feature, on by
+  default, each evaluation of the objective, its gradient and its Hessian
+  cuts its (field, spin) pairs into up to 64 pieces and runs the pieces on
+  rayon's thread pool. Long pulses get fewer pieces, so that the dense
+  Hessian accumulators stay within 256 MB together. Sums are grouped by the
+  size of the problem rather than the thread count, so a run gives
+  bit-for-bit the same pulse on one thread, on many, or with the feature off.
+  The B1-compensated `escalade_b1` run goes from 38 s to 4.8 s on a 12-core
+  machine. Where it applies:
+  - library and command line, native: every core by default;
+    `default-features = false` (`--no-default-features` in this repository)
+    runs on one core;
+  - desktop application: every core;
+  - browser application (`wasm32`): one core, even when the page is
+    cross-origin isolated.
+
+  QOALA's coupled-spin optimisation is unchanged, on one core everywhere.
+- **Example** `escalade_parallel`: times the objective at every order on 1,
+  2, 4, ... threads, then a whole optimisation on one thread and on all of
+  them, and fails if any result differs.
+
+### Changed
+
+- New optional dependency `rayon`, behind the default `parallel` feature and
+  never built for `wasm32`. `default-features = false` drops it.
+- The ESCALADE objective sums its work items in a fixed tree rather than left
+  to right, so its last digits, and after many iterations the path of an
+  optimisation, differ slightly from 1.2.0: the 1000-iteration B1-compensated
+  run of `escalade_b1` now ends at fidelity 0.98875 rather than 0.98924.
+- **Small ESCALADE problems are slightly slower on one core** - in the
+  browser, with `--no-default-features`, or on a single rayon thread. The
+  pieces are fixed so that every build groups the sums the same way, so a
+  single field of 51 spins becomes 51 one-spin pieces, each allocating,
+  zeroing and merging its own Hessian accumulator where 1.2.0 used one. That
+  costs about 5%: 25.8 ms against 24.5 ms for 20 iterations of the broadband
+  preset. With more
+  fields each piece holds more spins and the cost spreads out; on several
+  cores the speed-up outweighs it.
+- **The application says where ESCALADE runs.** With ESCALADE selected, the
+  browser build notes that it runs on one core and the desktop build spreads
+  it over every core; the desktop build gives the size of rayon's thread
+  pool, which follows `RAYON_NUM_THREADS`. This replaces
+  the warning that a page without cross-origin isolation runs on one core,
+  which wrongly implied that isolation would give more.
+- **The Run-button estimate for ESCALADE accounts for cores** on the desktop.
+  Its constants are for one core, as before; the desktop estimate is divided
+  by rayon's thread count times an efficiency of 0.6. The browser estimate is
+  unchanged. Calibrate with `RAYON_NUM_THREADS=1`.
+- **`deploy/README.md` and the header files say that cross-origin isolation
+  does not speed up the current web build.**
+
 ## [1.2.0]
 
 ### Added
