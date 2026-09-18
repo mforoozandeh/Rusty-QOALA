@@ -412,7 +412,7 @@ impl Setup {
     pub fn shape_problems(&self) -> Vec<String> {
         // Everything else is sized from the spin count, so it goes first.
         if !(2..=MAX_SPINS).contains(&self.nspins) {
-            return vec![format!("between 2 and {MAX_SPINS} spins, please")];
+            return vec![format!("between 2 and {MAX_SPINS} qubits, please")];
         }
         let mut out = Vec::new();
         let mut expect = |what: &str, got: usize, want: usize| {
@@ -446,12 +446,12 @@ impl Setup {
         }
         for k in 0..self.npairs {
             if !(0..self.nspins).any(|s| self.spin_control[s][k]) {
-                out.push(format!("control pair {} drives no spin", k + 1));
+                out.push(format!("control pair {} drives no qubit", k + 1));
             }
         }
         for s in 0..self.nspins {
             if !(0..self.npairs).any(|k| self.spin_control[s][k]) {
-                out.push(format!("spin {} has no control", s + 1));
+                out.push(format!("qubit {} has no control", s + 1));
             }
         }
         if self.duration_s <= 0.0 {
@@ -464,7 +464,7 @@ impl Setup {
             out.push("every control pair needs a positive maximum amplitude".into());
         }
         if self.couplings.iter().all(|c| c.j_hz == 0.0) {
-            out.push("with no couplings the spins cannot talk to each other".into());
+            out.push("with no couplings the qubits cannot talk to each other".into());
         }
         match &self.target {
             Target::Transfer { from, to } => {
@@ -479,7 +479,7 @@ impl Setup {
                             }
                             if p.terms.iter().any(|(s, _)| *s >= self.nspins) {
                                 out.push(
-                                    "a product operator names a spin that does not exist".into(),
+                                    "a product operator names a qubit that does not exist".into(),
                                 );
                             }
                         }

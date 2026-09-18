@@ -10,10 +10,12 @@ fn main() -> eframe::Result {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 840.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("QOALA"),
+            .with_title("Rusty-QOALA"),
         ..Default::default()
     };
     eframe::run_native(
+        // Not the title: eframe files saved sessions under this name, so
+        // changing it would lose every desktop user's stored setup.
         "QOALA",
         options,
         Box::new(|cc| Ok(Box::new(app::QoalaApp::new(cc)))),
@@ -50,9 +52,8 @@ fn main() {
         if let Some(loading) = document.get_element_by_id("loading") {
             match result {
                 Ok(_) => loading.remove(),
-                Err(e) => {
-                    loading.set_inner_html(&format!("<p>QOALA failed to start.</p><p>{e:?}</p>"))
-                }
+                Err(e) => loading
+                    .set_inner_html(&format!("<p>Rusty-QOALA failed to start.</p><p>{e:?}</p>")),
             }
         }
     });

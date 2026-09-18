@@ -16,22 +16,27 @@ pub enum Algorithm {
 }
 
 impl Algorithm {
-    /// Both, for a switch.
-    pub const ALL: [Algorithm; 2] = [Algorithm::Qoala, Algorithm::Escalade];
+    /// Both, for a switch, in the order it shows them.
+    pub const ALL: [Algorithm; 2] = [Algorithm::Escalade, Algorithm::Qoala];
 
-    /// Label for the switch.
+    /// Label for the switch.  The interface names the problem, not the
+    /// method: ESCALADE and QOALA appear nowhere on screen.
     pub fn name(self) -> &'static str {
         match self {
-            Algorithm::Qoala => "QOALA",
-            Algorithm::Escalade => "ESCALADE",
+            Algorithm::Escalade => "Single-qubit",
+            Algorithm::Qoala => "Multi-qubit",
         }
     }
 
     /// One line on what it is for.
     pub fn blurb(self) -> &'static str {
         match self {
-            Algorithm::Qoala => "coupled spins: adaptive split-operator pulse optimisation",
-            Algorithm::Escalade => "single spins across a band: broadband and B1-robust pulses",
+            Algorithm::Escalade => {
+                "uncoupled qubits across a band of offsets: broadband and B1-robust pulses"
+            }
+            Algorithm::Qoala => {
+                "coupled qubits: state transfer and gates by adaptive operator splitting"
+            }
         }
     }
 }

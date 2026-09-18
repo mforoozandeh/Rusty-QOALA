@@ -51,7 +51,7 @@ fn couple(setup: &mut Setup, i: usize, j: usize, j_hz: f64, strong: bool) {
 
 /// `examples/z2z_2spin_1.rs`: z-to-z transfer across a weakly coupled pair.
 pub fn z2z_2spin_1() -> Setup {
-    let mut s = blank("z to z, 2 spins, weak coupling", 2, 2);
+    let mut s = blank("z to z, 2 qubits, weak coupling", 2, 2);
     one_pair_per_spin(&mut s);
     couple(&mut s, 0, 1, 140.0, false);
     s.duration_s = 0.01;
@@ -62,7 +62,7 @@ pub fn z2z_2spin_1() -> Setup {
 /// `examples/z2z_2spin_2.rs`: strong coupling, one control pair driving both
 /// spins, and a target that is a sign flip on a single basis element.
 pub fn z2z_2spin_2() -> Setup {
-    let mut s = blank("z to z, 2 spins, strong coupling", 2, 1);
+    let mut s = blank("z to z, 2 qubits, strong coupling", 2, 1);
     for spin in 0..2 {
         s.spin_control[spin][0] = true;
     }
@@ -87,7 +87,7 @@ pub fn z2z_2spin_2() -> Setup {
 
 /// `examples/z2z_3spin_1.rs`: z-to-z transfer along a three-spin chain.
 pub fn z2z_3spin_1() -> Setup {
-    let mut s = blank("z to z, 3 spins", 3, 3);
+    let mut s = blank("z to z, 3 qubits", 3, 3);
     one_pair_per_spin(&mut s);
     couple(&mut s, 0, 1, 140.0, false);
     couple(&mut s, 1, 2, -160.0, false);
@@ -102,7 +102,7 @@ pub fn z2z_3spin_1() -> Setup {
 
 /// `examples/swap_2spin_1.rs`: SWAP between a weakly coupled pair.
 pub fn swap_2spin_1() -> Setup {
-    let mut s = blank("SWAP, 2 spins", 2, 2);
+    let mut s = blank("SWAP, 2 qubits", 2, 2);
     one_pair_per_spin(&mut s);
     couple(&mut s, 0, 1, 140.0, false);
     s.duration_s = 0.012;
@@ -116,7 +116,7 @@ pub fn swap_2spin_1() -> Setup {
 
 /// `examples/swap_3spin_1.rs`: SWAP between the end spins of a chain.
 pub fn swap_3spin_1() -> Setup {
-    let mut s = blank("SWAP, 3 spins, end to end", 3, 3);
+    let mut s = blank("SWAP, 3 qubits, end to end", 3, 3);
     one_pair_per_spin(&mut s);
     couple(&mut s, 0, 1, 140.0, false);
     couple(&mut s, 1, 2, -160.0, false);

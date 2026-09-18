@@ -154,7 +154,7 @@ impl EscaladeSetup {
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         if !(1..=MAX_SPINS).contains(&self.nspins) {
-            out.push(format!("between 1 and {MAX_SPINS} spins, please"));
+            out.push(format!("between 1 and {MAX_SPINS} qubits, please"));
         }
         if !(self.sw_hz >= 0.0 && self.sw_hz.is_finite()) {
             out.push("the bandwidth cannot be negative".into());

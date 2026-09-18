@@ -1,4 +1,4 @@
-//! QOALA and ESCALADE in a window, or in a browser tab.
+//! Rusty-QOALA: QOALA and ESCALADE in a window, or in a browser tab.
 //!
 //! `cargo run -p qoala-gui` gives the desktop application; `trunk serve
 //! --config gui/Trunk.toml` from the repository root gives the web one, which
@@ -14,6 +14,7 @@ pub mod app;
 pub mod escalade;
 pub mod estimate;
 pub mod export;
+pub mod numbers;
 pub mod platform;
 pub mod presets;
 pub mod problem;

@@ -7,7 +7,7 @@
 
 use crate::problem::Problem;
 
-/// Stair points for one channel: `[time in ms, amplitude in Hz]`, two per
+/// Stair points for one channel: `[time in s, amplitude in Hz]`, two per
 /// slice so the trace is flat across each one.
 pub fn stairs(problem: &Problem, waveform: &[Vec<f64>], channel: usize) -> Vec<[f64; 2]> {
     let two_pi = 2.0 * std::f64::consts::PI;
@@ -24,9 +24,9 @@ pub fn stairs(problem: &Problem, waveform: &[Vec<f64>], channel: usize) -> Vec<[
     let mut t = 0.0;
     for (n, row) in waveform.iter().enumerate() {
         let hz = row.get(channel).copied().unwrap_or(0.0) * scale;
-        points.push([t * 1e3, hz]);
+        points.push([t, hz]);
         t += dt.get(n).copied().unwrap_or(nominal);
-        points.push([t * 1e3, hz]);
+        points.push([t, hz]);
     }
     points
 }
@@ -50,10 +50,10 @@ mod tests {
         assert_eq!(points.len(), 2 * setup.nslices);
         // Half amplitude of a 1000 Hz channel.
         assert!(points.iter().all(|p| (p[1] - 500.0).abs() < 1e-9));
-        // Time starts at zero and ends at the pulse duration, in ms.
-        assert!((points[0][0] - 0.0).abs() < 1e-12);
+        // Time starts at zero and ends at the pulse duration, in seconds.
+        assert!((points[0][0] - 0.0).abs() < 1e-15);
         let last = points.last().unwrap()[0];
-        assert!((last - setup.duration_s * 1e3).abs() < 1e-9, "{last}");
+        assert!((last - setup.duration_s).abs() < 1e-15, "{last}");
     }
 
     #[test]
@@ -65,7 +65,7 @@ mod tests {
             .iter()
             .all(|p| (p[1] - 0.5 * setup.rf_hz).abs() < 1e-9));
         let last = points.last().unwrap()[0];
-        assert!((last - setup.duration_s * 1e3).abs() < 1e-9);
+        assert!((last - setup.duration_s).abs() < 1e-15);
     }
 
     /// Editing the setup after a run must not be able to take the plot down

@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0]
 
 ### Added
 
@@ -43,21 +43,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   single field of 51 spins becomes 51 one-spin pieces, each allocating,
   zeroing and merging its own Hessian accumulator where 1.2.0 used one. That
   costs about 5%: 25.8 ms against 24.5 ms for 20 iterations of the broadband
-  preset. With more
-  fields each piece holds more spins and the cost spreads out; on several
-  cores the speed-up outweighs it.
-- **The application says where ESCALADE runs.** With ESCALADE selected, the
-  browser build notes that it runs on one core and the desktop build spreads
-  it over every core; the desktop build gives the size of rayon's thread
-  pool, which follows `RAYON_NUM_THREADS`. This replaces
-  the warning that a page without cross-origin isolation runs on one core,
-  which wrongly implied that isolation would give more.
-- **The Run-button estimate for ESCALADE accounts for cores** on the desktop.
+  preset. With more fields each piece holds more spins and the cost spreads
+  out; on several cores the speed-up outweighs it.
+- **The application says where single-qubit optimisation runs.** With
+  Single-qubit selected, the browser build notes that it runs on one core and
+  the desktop build spreads it over every core; the desktop build gives the
+  size of rayon's thread pool, which follows `RAYON_NUM_THREADS`. This
+  replaces the warning that a page without cross-origin isolation runs on one
+  core, which wrongly implied that isolation would give more.
+- **The Run-button estimate for single-qubit runs accounts for cores** on the
+  desktop.
   Its constants are for one core, as before; the desktop estimate is divided
   by rayon's thread count times an efficiency of 0.6. The browser estimate is
   unchanged. Calibrate with `RAYON_NUM_THREADS=1`.
 - **`deploy/README.md` and the header files say that cross-origin isolation
   does not speed up the current web build.**
+- **The application is called Rusty-QOALA** - in the window title, the
+  browser tab and the loading page - **and names problems, not methods.**
+  The switch reads Single-qubit and Multi-qubit instead of ESCALADE and
+  QOALA, and the interface says qubits where it said spins, preset names
+  included. Links, stored sessions and exported setups from earlier versions
+  still load.
+- **The application works in SI units throughout**: durations in seconds
+  (they were ms for multi-qubit pulses and µs for single-qubit ones),
+  bandwidth and field amplitude in Hz (they were kHz), and the plot axes to
+  match. Numbers can be typed in scientific notation, `2e6` or `3e-6`, and
+  are shown that way below 0.001 and from 100000 up. Durations accept
+  1e-12 to 1e3 s and field amplitudes up to 1e12 Hz, so nanosecond pulses
+  can be set up. Dragging a value moves it by half a percent of itself.
+  Stored setups were already in SI, so nothing needs converting.
 
 ## [1.2.0]
 

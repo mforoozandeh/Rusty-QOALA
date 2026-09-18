@@ -1,4 +1,4 @@
-# Hosting the QOALA web application
+# Hosting the Rusty-QOALA web application
 
 The application is already hosted at <https://rusty-qoala.pages.dev>, on
 Cloudflare Pages. `.github/workflows/deploy.yml` builds and publishes it on

@@ -6,6 +6,7 @@ use egui_plot::{Legend, Line, Plot, PlotImage, PlotPoint, PlotPoints};
 use crate::escalade::{self, Analysis, Direction, EscaladeSetup};
 use crate::estimate::{estimate_seconds_on, is_upper_bound};
 use crate::export;
+use crate::numbers;
 use crate::platform::{self, Platform};
 use crate::presets;
 use crate::problem::{Algorithm, Problem};
@@ -318,7 +319,7 @@ impl QoalaApp {
                 }
                 if blocked {
                     let why = if too_big {
-                        format!("{} spins needs the desktop build", self.qoala.nspins)
+                        format!("{} qubits needs the desktop build", self.qoala.nspins)
                     } else {
                         problems.join("; ")
                     };
@@ -350,13 +351,13 @@ impl QoalaApp {
         if self.algorithm == Algorithm::Escalade {
             if self.platform.is_web {
                 ui.weak(
-                    "In the browser ESCALADE runs on one core. \
-                     The desktop application spreads its work over every core.",
+                    "In the browser single-qubit optimisation runs on one core. \
+                     The desktop application spreads it over every core.",
                 );
             } else {
                 let threads = self.platform.cores;
                 ui.weak(format!(
-                    "ESCALADE spreads its work over {threads} thread{} here.",
+                    "Single-qubit optimisation spreads its work over {threads} thread{} here.",
                     if threads == 1 { "" } else { "s" }
                 ));
             }
@@ -395,12 +396,12 @@ impl QoalaApp {
     }
 
     fn spin_system(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Spin system")
+        egui::CollapsingHeader::new("Qubits")
             .default_open(true)
             .show(ui, |ui| {
                 let max = self.max_spins();
                 ui.horizontal(|ui| {
-                    ui.label("spins");
+                    ui.label("qubits");
                     let mut nspins = self.qoala.nspins;
                     if ui
                         .add(egui::DragValue::new(&mut nspins).range(2..=max))
@@ -417,12 +418,13 @@ impl QoalaApp {
                 ui.label("resonance offsets, Hz");
                 egui::Grid::new("offsets").num_columns(2).show(ui, |ui| {
                     for s in 0..self.qoala.nspins {
-                        ui.label(format!("spin {}", s + 1));
-                        ui.add(
-                            egui::DragValue::new(&mut self.qoala.offsets_hz[s])
-                                .speed(10.0)
-                                .suffix(" Hz"),
-                        );
+                        ui.label(format!("qubit {}", s + 1));
+                        ui.add(si_value(
+                            &mut self.qoala.offsets_hz[s],
+                            "Hz",
+                            f64::NEG_INFINITY..=f64::INFINITY,
+                            10.0,
+                        ));
                         ui.end_row();
                     }
                 });
@@ -434,11 +436,12 @@ impl QoalaApp {
                         for j in (i + 1)..self.qoala.nspins {
                             let index = pair_index(self.qoala.nspins, i, j);
                             ui.label(format!("{}-{}", i + 1, j + 1));
-                            ui.add(
-                                egui::DragValue::new(&mut self.qoala.couplings[index].j_hz)
-                                    .speed(1.0)
-                                    .suffix(" Hz"),
-                            );
+                            ui.add(si_value(
+                                &mut self.qoala.couplings[index].j_hz,
+                                "Hz",
+                                f64::NEG_INFINITY..=f64::INFINITY,
+                                1.0,
+                            ));
                             let strong = &mut self.qoala.couplings[index].strong;
                             let text = if *strong { "strong" } else { "weak" };
                             if ui.selectable_label(*strong, text).clicked() {
@@ -462,7 +465,7 @@ impl QoalaApp {
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "Each pair is one x and one y control.  Tick the spins it drives.",
+                        "Each pair is one x and one y control.  Tick the qubits it drives.",
                     )
                     .small()
                     .weak(),
@@ -488,7 +491,7 @@ impl QoalaApp {
                         }
                         ui.end_row();
                         for s in 0..self.qoala.nspins {
-                            ui.label(format!("spin {}", s + 1));
+                            ui.label(format!("qubit {}", s + 1));
                             for k in 0..self.qoala.npairs {
                                 ui.checkbox(&mut self.qoala.spin_control[s][k], "");
                             }
@@ -496,12 +499,12 @@ impl QoalaApp {
                         }
                         ui.label("max amp");
                         for k in 0..self.qoala.npairs {
-                            ui.add(
-                                egui::DragValue::new(&mut self.qoala.amplitudes_hz[k])
-                                    .speed(50.0)
-                                    .range(1.0..=1e7)
-                                    .suffix(" Hz"),
-                            );
+                            ui.add(si_value(
+                                &mut self.qoala.amplitudes_hz[k],
+                                "Hz",
+                                FREQUENCY,
+                                1.0,
+                            ));
                         }
                         ui.end_row();
                     });
@@ -587,18 +590,7 @@ impl QoalaApp {
             .show(ui, |ui| {
                 egui::Grid::new("pulse").num_columns(2).show(ui, |ui| {
                     ui.label("duration");
-                    let mut ms = self.qoala.duration_s * 1e3;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut ms)
-                                .speed(0.1)
-                                .range(0.001..=1e5)
-                                .suffix(" ms"),
-                        )
-                        .changed()
-                    {
-                        self.qoala.duration_s = ms * 1e-3;
-                    }
+                    ui.add(si_value(&mut self.qoala.duration_s, "s", DURATION, 1e-6));
                     ui.end_row();
 
                     ui.label("time slices");
@@ -657,23 +649,12 @@ impl QoalaApp {
             .show(ui, |ui| {
                 let s = &mut self.escalade;
                 egui::Grid::new("band").num_columns(2).show(ui, |ui| {
-                    ui.label("spins");
+                    ui.label("qubits");
                     ui.add(egui::DragValue::new(&mut s.nspins).range(1..=escalade::MAX_SPINS));
                     ui.end_row();
 
                     ui.label("bandwidth");
-                    let mut khz = s.sw_hz * 1e-3;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut khz)
-                                .speed(0.1)
-                                .range(0.0..=1e4)
-                                .suffix(" kHz"),
-                        )
-                        .changed()
-                    {
-                        s.sw_hz = khz * 1e3;
-                    }
+                    ui.add(si_value(&mut s.sw_hz, "Hz", 0.0..=MAX_FREQUENCY, 100.0));
                     ui.end_row();
 
                     ui.label("from");
@@ -686,10 +667,10 @@ impl QoalaApp {
                 });
                 ui.label(
                     egui::RichText::new(format!(
-                        "{} spins evenly from -{:.1} to +{:.1} kHz",
+                        "{} qubits evenly from -{} to +{} Hz",
                         s.nspins,
-                        s.sw_hz * 5e-4,
-                        s.sw_hz * 5e-4
+                        numbers::rounded(s.sw_hz / 2.0),
+                        numbers::rounded(s.sw_hz / 2.0)
                     ))
                     .small()
                     .weak(),
@@ -704,18 +685,7 @@ impl QoalaApp {
                 let s = &mut self.escalade;
                 egui::Grid::new("field").num_columns(2).show(ui, |ui| {
                     ui.label("amplitude");
-                    let mut khz = s.rf_hz * 1e-3;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut khz)
-                                .speed(0.1)
-                                .range(0.001..=1e4)
-                                .suffix(" kHz"),
-                        )
-                        .changed()
-                    {
-                        s.rf_hz = khz * 1e3;
-                    }
+                    ui.add(si_value(&mut s.rf_hz, "Hz", FREQUENCY, 1.0));
                     ui.end_row();
 
                     ui.label("B1 compensation");
@@ -756,10 +726,10 @@ impl QoalaApp {
                 });
                 let note = if s.b1_spread > 0.0 {
                     format!(
-                        "optimised over {} fields from {:.2} to {:.2} kHz",
+                        "optimised over {} fields from {} to {} Hz",
                         s.b1_fields,
-                        s.rf_hz * (1.0 - s.b1_spread) * 1e-3,
-                        s.rf_hz * (1.0 + s.b1_spread) * 1e-3
+                        numbers::rounded(s.rf_hz * (1.0 - s.b1_spread)),
+                        numbers::rounded(s.rf_hz * (1.0 + s.b1_spread))
                     )
                 } else {
                     "optimised for the nominal field alone".to_string()
@@ -782,18 +752,7 @@ impl QoalaApp {
                     .num_columns(2)
                     .show(ui, |ui| {
                         ui.label("duration");
-                        let mut us = s.duration_s * 1e6;
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut us)
-                                    .speed(1.0)
-                                    .range(0.001..=1e7)
-                                    .suffix(" µs"),
-                            )
-                            .changed()
-                        {
-                            s.duration_s = us * 1e-6;
-                        }
+                        ui.add(si_value(&mut s.duration_s, "s", DURATION, 1e-6));
                         ui.end_row();
 
                         ui.label("points");
@@ -826,7 +785,7 @@ impl QoalaApp {
                     });
                 ui.label(
                     egui::RichText::new(format!(
-                        "{} spins x {} fields x {} points",
+                        "{} qubits x {} fields x {} points",
                         s.nspins,
                         s.fields_hz().len(),
                         s.nslices
@@ -899,6 +858,46 @@ fn direction_menu(ui: &mut egui::Ui, id: &str, direction: &mut Direction) {
         });
 }
 
+/// Durations a field accepts, in seconds: picoseconds to a quarter of an hour.
+const DURATION: std::ops::RangeInclusive<f64> = 1e-12..=1e3;
+/// Largest frequency a field accepts, in Hz.
+const MAX_FREQUENCY: f64 = 1e12;
+/// Field amplitudes a field accepts, in Hz.
+const FREQUENCY: std::ops::RangeInclusive<f64> = 1e-3..=MAX_FREQUENCY;
+
+/// A drag-or-type field for a quantity in SI units, shown and read as
+/// [`numbers::format`] writes it, so `2e6` and `3e-6` can be typed.
+///
+/// Dragging moves the value by half a percent of itself per point, so a
+/// nanosecond and a millisecond pulse drag alike; `at_zero` is the step while
+/// the value is zero.
+fn si_value<'a>(
+    value: &'a mut f64,
+    unit: &str,
+    range: std::ops::RangeInclusive<f64>,
+    at_zero: f64,
+) -> egui::DragValue<'a> {
+    let speed = if *value == 0.0 {
+        at_zero
+    } else {
+        value.abs() * 0.005
+    };
+    egui::DragValue::new(value)
+        .speed(speed)
+        .range(range)
+        .suffix(format!(" {unit}"))
+        .custom_formatter(|v, _| numbers::format(v))
+}
+
+/// A plot's hover label: the series, then the point.
+fn read_out(name: &str, x: &str, y: &str) -> String {
+    if name.is_empty() {
+        format!("{x}\n{y}")
+    } else {
+        format!("{name}\n{x}\n{y}")
+    }
+}
+
 fn product_editor(ui: &mut egui::Ui, id: &str, op: &mut ProductOperator, nspins: usize) {
     ui.label(op.label());
     let nterms = op.terms.len();
@@ -909,7 +908,7 @@ fn product_editor(ui: &mut egui::Ui, id: &str, op: &mut ProductOperator, nspins:
             .add(
                 egui::DragValue::new(&mut one_based)
                     .range(1..=nspins)
-                    .prefix("spin "),
+                    .prefix("qubit "),
             )
             .changed()
         {
@@ -1117,7 +1116,16 @@ impl QoalaApp {
         Plot::new("waveform")
             .legend(Legend::default())
             .allow_scroll(false)
-            .x_axis_label("time, ms")
+            .x_axis_label("time, s")
+            .x_axis_formatter(|mark, _| numbers::tick(mark.value, mark.step_size))
+            .y_axis_formatter(|mark, _| numbers::tick(mark.value, mark.step_size))
+            .label_formatter(|name, p| {
+                read_out(
+                    name,
+                    &format!("{} s", numbers::rounded(p.x)),
+                    &format!("{} Hz", numbers::rounded(p.y)),
+                )
+            })
             .show(ui, |plot_ui| {
                 for (k, name) in names.iter().enumerate() {
                     if !self.show_channels.get(k).copied().unwrap_or(true) {
@@ -1137,9 +1145,9 @@ impl QoalaApp {
             return;
         };
         ui.label(format!(
-            "final magnetisation from {} at the nominal field; the optimised band is +/- {:.1} kHz",
+            "final magnetisation from {} at the nominal field; the optimised band is +/- {} Hz",
             setup.from.name(),
-            setup.sw_hz * 5e-4
+            numbers::rounded(setup.sw_hz / 2.0)
         ));
 
         type Series = fn(&qoala::escalade::profile::Magnetisation) -> f64;
@@ -1150,12 +1158,20 @@ impl QoalaApp {
             ("|Ixy|", |m| m.transverse()),
             ("phase / pi", |m| m.phase()),
         ];
-        let half_band = setup.sw_hz * 5e-4;
+        let half_band = setup.sw_hz / 2.0;
 
         Plot::new("profile")
             .legend(Legend::default())
             .allow_scroll(false)
-            .x_axis_label("offset, kHz")
+            .x_axis_label("offset, Hz")
+            .x_axis_formatter(|mark, _| numbers::tick(mark.value, mark.step_size))
+            .label_formatter(|name, p| {
+                read_out(
+                    name,
+                    &format!("{} Hz", numbers::rounded(p.x)),
+                    &numbers::rounded(p.y),
+                )
+            })
             .include_y(-1.05)
             .include_y(1.05)
             .show(ui, |plot_ui| {
@@ -1163,7 +1179,7 @@ impl QoalaApp {
                     let points: Vec<[f64; 2]> = analysis
                         .profile
                         .iter()
-                        .map(|p| [p.offset_hz * 1e-3, component(&p.m)])
+                        .map(|p| [p.offset_hz, component(&p.m)])
                         .collect();
                     plot_ui.line(Line::new(name, PlotPoints::from(points)));
                 }
@@ -1200,14 +1216,14 @@ impl QoalaApp {
 
         let map = &analysis.map;
         let (x0, x1) = (
-            map.offsets_hz.first().copied().unwrap_or(0.0) * 1e-3,
-            map.offsets_hz.last().copied().unwrap_or(0.0) * 1e-3,
+            map.offsets_hz.first().copied().unwrap_or(0.0),
+            map.offsets_hz.last().copied().unwrap_or(0.0),
         );
         let (y0, y1) = (
             map.scales.first().copied().unwrap_or(0.5),
             map.scales.last().copied().unwrap_or(1.5),
         );
-        let half_band = setup.sw_hz * 5e-4;
+        let half_band = setup.sw_hz / 2.0;
         let fields = setup.fields_hz();
         let (lo, hi) = (
             fields.first().copied().unwrap_or(setup.rf_hz) / setup.rf_hz,
@@ -1219,8 +1235,16 @@ impl QoalaApp {
             columns[0].label("final Iy over offset and field  (blue -1, white 0, red +1)");
             Plot::new("b1-map")
                 .allow_scroll(false)
-                .x_axis_label("offset, kHz")
+                .x_axis_label("offset, Hz")
                 .y_axis_label("B1 / nominal")
+                .x_axis_formatter(|mark, _| numbers::tick(mark.value, mark.step_size))
+                .label_formatter(|name, p| {
+                    read_out(
+                        name,
+                        &format!("{} Hz", numbers::rounded(p.x)),
+                        &format!("{} x nominal B1", numbers::rounded(p.y)),
+                    )
+                })
                 .show(&mut columns[0], |plot_ui| {
                     plot_ui.image(PlotImage::new(
                         "Iy",

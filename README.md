@@ -9,7 +9,7 @@
 Rust port of the QOALA MATLAB package by M. Foroozandeh, D. L. Goodwin and
 P. Singh.
 
-**Try it in your browser: <https://rusty-qoala.pages.dev>** - QOALA and
+**Try Rusty-QOALA in your browser: <https://rusty-qoala.pages.dev>** - QOALA and
 ESCALADE with presets and live plots, nothing to install. Everything runs on
 your machine; nothing is uploaded.
 
@@ -38,14 +38,14 @@ which is how a pulse is made robust to B1 inhomogeneity. See
 
 ```toml
 [dependencies]
-qoala = "1.1"
+qoala = "1.3"
 ```
 
 There is also a graphical front end: open it at
 <https://rusty-qoala.pages.dev>, or run it as a desktop application. See
 [The application](#the-application).
 
-Or from git, until it is published:
+Or the development version from git:
 
 ```toml
 [dependencies]
@@ -237,8 +237,9 @@ deploy/           cross-origin isolation headers, one file per host
 
 ## The application
 
-`gui/` is a front end over the same library: describe a spin system, pick a
-target, watch it converge, take the pulse away as a file. It runs two ways
+Rusty-QOALA, in `gui/`, is a front end over the same library: describe a
+qubit system, pick a target, watch it converge, take the pulse away as a
+file. It runs two ways
 from one source.
 
 **In the browser: <https://rusty-qoala.pages.dev>.** Nothing to install.
@@ -269,14 +270,21 @@ at rusty-qoala.pages.dev is built and published that way by
 
 What it gives you:
 
-- Both algorithms behind one switch. ESCALADE edits a band, a field (with an
-  optional B1 spread) and a pulse; QOALA edits a coupled spin system.
-- A visual editor for QOALA's control map - which channel drives which spin -
-  which is the least obvious part of the library's API.
+- Both problems behind one switch, named for what they optimise rather than
+  for the method. **Single-qubit** runs ESCALADE: it edits a band, a field
+  (with an optional B1 spread) and a pulse. **Multi-qubit** runs QOALA: it
+  edits a system of coupled qubits.
+- Every quantity in SI units - seconds and Hz - entered and shown in
+  scientific notation where that reads better: type `2e6` for 2000000, and
+  0.000003 shows as `3e-6`. Values of ordinary size, from 0.001 to 99999,
+  are written out in full. Nanosecond and millisecond pulses are equally easy
+  to set, and dragging a value moves it by a fixed fraction of itself.
+- A visual editor for the multi-qubit control map - which channel drives
+  which qubit - which is the least obvious part of the library's API.
 - Presets for the five QOALA examples and the two ESCALADE runs of
-  `test_escalade_visual.m`; the two-spin transfer is loaded on startup, so
+  `test_escalade_visual.m`; the two-qubit transfer is loaded on startup, so
   the first click gives a converged pulse in about a second.
-- For an ESCALADE pulse, a choice of three views under the convergence plot:
+- For a single-qubit pulse, a choice of three views under the convergence plot:
   the waveform, the excitation profile across offsets, and B1 robustness - a
   map of Iy over offset and field, beside the dphi/dB1 curve.
 - Infidelity against iteration on a log axis, the waveform as stairs in Hz,
@@ -290,9 +298,10 @@ What it gives you:
   the link and the visitor's own browser.
 
 Three limits worth knowing. The browser build runs on one core, cross-origin
-isolated or not, while the desktop build spreads ESCALADE over every core -
-several times faster for a B1-compensated pulse. QOALA runs on one core in
-both. Four-spin systems are dimension 256 with dense 256x256 propagators per
+isolated or not, while the desktop build spreads single-qubit optimisation
+over every core - several times faster for a B1-compensated pulse.
+Multi-qubit optimisation runs on one core in both. Four-qubit systems are
+dimension 256 with dense 256x256 propagators per
 slice; the browser build refuses them and points at the desktop one. And
 cancelling in the browser terminates the Web Worker, so the convergence curve
 is kept but the partial waveform is not - natively, cancellation is
@@ -343,7 +352,7 @@ functions apply to every propagator.
 
 ## Verification
 
-`cargo test` runs 121 tests. There is no MATLAB in the loop; every check is
+`cargo test` runs 142 tests. There is no MATLAB in the loop; every check is
 self-contained and tests the mathematics rather than a stored output.
 
 - **Gradients against finite differences.** Every objective function's analytic

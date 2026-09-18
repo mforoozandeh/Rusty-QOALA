@@ -250,10 +250,10 @@ mod tests {
     #[test]
     fn the_presets_land_near_their_measured_times() {
         let measured = [
-            ("z to z, 2 spins, weak coupling", 0.032),
-            ("SWAP, 2 spins", 0.055),
-            ("z to z, 3 spins", 0.334),
-            ("SWAP, 3 spins, end to end", 5.472),
+            ("z to z, 2 qubits, weak coupling", 0.032),
+            ("SWAP, 2 qubits", 0.055),
+            ("z to z, 3 qubits", 0.334),
+            ("SWAP, 3 qubits, end to end", 5.472),
         ];
         for (name, seconds) in measured {
             let mut setup = presets::qoala()
