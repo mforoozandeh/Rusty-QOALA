@@ -38,7 +38,7 @@ which is how a pulse is made robust to B1 inhomogeneity. See
 
 ```toml
 [dependencies]
-qoala = "1.3"
+qoala = "2.0"
 ```
 
 There is also a graphical front end: open it at
@@ -118,7 +118,7 @@ target. Pass `state-2spin-hetero`, `state-2spin-homo`, `state-3spin-hetero`,
 ## ESCALADE
 
 ```rust
-use qoala::escalade::{escalade, magnetisation, Escalade, States};
+use qoala::escalade::{escalade, magnetisation, Escalade, Goal, States};
 
 // z to -y across 20 kHz, with a 17 kHz field, in 100 microseconds.
 let optimised = escalade(&Escalade {
@@ -127,10 +127,39 @@ let optimised = escalade(&Escalade {
     rf: vec![17000.0],                           // field, Hz; several values for B1 robustness
     tau_p: 100e-6,                               // seconds
     np_pulse: 50,                                // pulse points
-    initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
-    target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+    goal: Goal::Transfer {
+        initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
+        target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+    },
     use_hessian: true,                           // Newton trust region on the exact Hessian
     seed: Some(1),
+    ..Default::default()
+})?;
+
+println!("{:.4} after {} iterations", optimised.fidelity, optimised.counters.iter);
+# Ok::<(), qoala::error::QoalaError>(())
+```
+
+**Universal rotations.** A pulse that turns every magnetisation the same way,
+whatever it started as, is asked for its propagator: `rotation(axis, angle)`
+is the SU(2) operator, and the fidelity is `Re tr(W^dagger U) / 2` averaged
+over the band. For 90 degrees about x, x stays, y goes to z and z to -y.
+Scoring those three transfers instead would not tell `U` from `-U`, and lets
+parts of the band settle on opposite signs with the spins between them stuck
+180 degrees off.
+
+```rust
+use qoala::escalade::{escalade, rotation, Escalade, Goal};
+
+let optimised = escalade(&Escalade {
+    nspins: 51,
+    sw: 30000.0,                                 // nearly twice the field
+    rf: vec![17000.0],
+    tau_p: 200e-6,
+    np_pulse: 100,
+    goal: Goal::Rotation(rotation([1.0, 0.0, 0.0], std::f64::consts::FRAC_PI_2)),
+    max_iter: 2000,
+    seed: Some(3),
     ..Default::default()
 })?;
 
@@ -151,7 +180,8 @@ dphi/dB1 curve as CSV; optimising over 0.8 to 1.2 times the field lifts the
 worst-case fidelity across that range from 0.84 to 0.95.
 
 `escalade::profile` computes the offset profile, the B1 map and the phase
-sensitivity of any pulse, from the same propagators the optimiser uses.
+sensitivity of any pulse, from any starting magnetisation, with the same
+propagators the optimiser uses.
 
 **Threads.** One spin at one field - a work item - is a time-ordered product
 over the pulse, but the work items are independent of each other. The `parallel` feature, on by

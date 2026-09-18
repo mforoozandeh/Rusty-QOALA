@@ -31,7 +31,8 @@
 //!   one- and two-qubit gates.
 //! * [`escalade`] - ESCALADE, the uncoupled single-spin method QOALA
 //!   extends: one pulse for a band of offsets and a spread of field
-//!   strengths, optimised on the exact Hessian.
+//!   strengths, optimised on the exact Hessian, for a state transfer or a
+//!   universal rotation.
 //!
 //! ## The numerical layers
 //!

@@ -2,7 +2,9 @@
 //!
 //! Broadband single-qubit pulse design: one x/y pulse that takes every spin
 //! across a band of resonance offsets - and, optionally, across a spread of
-//! radio-frequency field strengths - from an initial state to a target state.
+//! radio-frequency field strengths - from an initial state to a target state,
+//! or to a target propagator: a universal rotation, which turns every state
+//! alike.
 //!
 //! A Rust port of the ESCALADE MATLAB code by M. Foroozandeh and P. Singh.
 //! QOALA extends the same closed-form single-spin propagators to coupled
@@ -30,5 +32,5 @@ pub mod propagators;
 pub mod settings;
 pub mod solve;
 
-pub use settings::{magnetisation, Escalade, Settings, States};
+pub use settings::{magnetisation, rotation, Escalade, Goal, Settings, States};
 pub use solve::{escalade, escalade_with_progress, optimise, Optimised};

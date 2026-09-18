@@ -1,10 +1,11 @@
-//! One-click setups: the five QOALA repository examples, and the two
-//! ESCALADE runs of `test_runs/test_escalade_visual.m`.
+//! One-click setups: the five QOALA repository examples, the two ESCALADE
+//! runs of `test_runs/test_escalade_visual.m`, and an ESCALADE universal
+//! rotation.
 //!
 //! Every QOALA number here is copied from the corresponding file in
 //! `examples/`, so clicking Run on a preset reproduces that example.
 
-use crate::escalade::{Direction, EscaladeSetup};
+use crate::escalade::{Direction, EscaladeSetup, Goal};
 use crate::problem::Problem;
 use crate::setup::{
     pair_count, pair_index, Component, Coupling, GateChoice, Operator, PenaltyChoice, Setup, Target,
@@ -163,8 +164,10 @@ pub fn escalade_b1_sensitive() -> EscaladeSetup {
         b1_fields: 1,
         duration_s: 100e-6,
         nslices: 50,
+        goal: Goal::Transfer,
         from: Direction::PlusZ,
         to: Direction::MinusY,
+        rotation: [Direction::PlusX, Direction::PlusZ, Direction::MinusY],
         use_hessian: true,
         max_iter: 1000,
         target_fidelity: 0.99,
@@ -183,9 +186,27 @@ pub fn escalade_b1_compensated() -> EscaladeSetup {
     }
 }
 
+/// A universal 90-degree rotation about x across 10 kHz: x stays, y goes to
+/// z and z to -y, whatever the magnetisation started as.  Not one of the
+/// MATLAB's runs, which have one initial and one target state.
+pub fn escalade_universal_rotation() -> EscaladeSetup {
+    EscaladeSetup {
+        name: "Broadband universal 90-degree rotation about x".into(),
+        sw_hz: 10000.0,
+        duration_s: 200e-6,
+        nslices: 60,
+        goal: Goal::Rotation,
+        ..escalade_b1_sensitive()
+    }
+}
+
 /// Every ESCALADE preset, in menu order.
 pub fn escalade() -> Vec<EscaladeSetup> {
-    vec![escalade_b1_sensitive(), escalade_b1_compensated()]
+    vec![
+        escalade_b1_sensitive(),
+        escalade_b1_compensated(),
+        escalade_universal_rotation(),
+    ]
 }
 
 /// Every preset of both kinds.

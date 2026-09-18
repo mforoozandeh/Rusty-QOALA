@@ -193,6 +193,11 @@ stalled (`ExitFlag::StepTolerance`).
   `targetfidelity = -0.99` is `target_fidelity: 0.99`.
 - **Weights are checked.** `readSettings` silently replaces `rfweights` of the
   wrong length with equal weights; the port refuses them.
+- **Universal rotations.** The MATLAB takes one initial and one target state
+  per spin. The port also takes a target propagator, `Goal::Rotation`,
+  scored on `Re tr(W^dagger U) / 2`, so that one pulse can be optimised to
+  turn every axis alike. A state transfer computes exactly what the MATLAB
+  does.
 - **Visualisation.** `escalade::profile` computes what
   `ESCALADE_pulse_sim.m` and `ESCALADE_Bloch_B1.m` plot, over the same grids,
   but propagates with the optimiser's own SU(2) propagators rather than the

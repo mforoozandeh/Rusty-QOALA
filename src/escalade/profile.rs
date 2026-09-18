@@ -7,7 +7,9 @@
 //! The scripts run a separate rotation-matrix Bloch simulation with its own
 //! phase convention.  Everything here propagates with the SU(2) propagators
 //! the objective itself uses, so what is plotted is, by construction, what
-//! was optimised.  As in the scripts, the magnetisation starts along +z.
+//! was optimised.  The scripts start the magnetisation along +z; here it
+//! starts wherever the caller says, so that each transfer of a universal
+//! rotation can be followed on its own.
 
 use super::propagators::{slice, spin_operator, Op2};
 use crate::optim::ObjectiveRequest;
@@ -25,6 +27,16 @@ pub struct Magnetisation {
 }
 
 impl Magnetisation {
+    /// Magnetisation `(x, y, z)`.
+    pub const fn new(x: f64, y: f64, z: f64) -> Self {
+        Magnetisation { x, y, z }
+    }
+
+    /// Scalar product: for unit vectors, how far one lies along the other.
+    pub fn dot(&self, other: &Magnetisation) -> f64 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
     /// Length of the transverse part, the scripts' `Ixy`.
     pub fn transverse(&self) -> f64 {
         self.x.hypot(self.y)
@@ -36,14 +48,15 @@ impl Magnetisation {
     }
 }
 
-/// Where +z magnetisation ends up after `pulse` (`np x 2`, dimensionless),
-/// applied for `tau_p` seconds at a field of `rf_hz` to a spin `offset_hz`
-/// off resonance.
+/// Where magnetisation starting along `start` ends up after `pulse`
+/// (`np x 2`, dimensionless), applied for `tau_p` seconds at a field of
+/// `rf_hz` to a spin `offset_hz` off resonance.
 pub fn final_magnetisation(
     pulse: &DMatrix<f64>,
     tau_p: f64,
     rf_hz: f64,
     offset_hz: f64,
+    start: Magnetisation,
 ) -> Magnetisation {
     let two_pi = 2.0 * std::f64::consts::PI;
     let n = pulse.nrows();
@@ -60,7 +73,7 @@ pub fn final_magnetisation(
         );
         u = step.u * u;
     }
-    let rho = u * spin_operator([0.0, 0.0, 2.0]) * u.adjoint();
+    let rho = u * spin_operator([2.0 * start.x, 2.0 * start.y, 2.0 * start.z]) * u.adjoint();
     let component = |axis: [f64; 3]| (spin_operator(axis) * rho).trace().re;
     Magnetisation {
         x: component([1.0, 0.0, 0.0]),
@@ -78,68 +91,84 @@ pub struct ProfilePoint {
     pub m: Magnetisation,
 }
 
-/// The excitation profile over one and a half times the bandwidth, as
-/// `ESCALADE_pulse_sim` plots it.
+/// The excitation profile of magnetisation starting along `start`, over one
+/// and a half times the bandwidth, as `ESCALADE_pulse_sim` plots it from +z.
 pub fn offset_profile(
     pulse: &DMatrix<f64>,
     tau_p: f64,
     rf_hz: f64,
     sw_hz: f64,
     npoints: usize,
+    start: Magnetisation,
 ) -> Vec<ProfilePoint> {
     plot_offsets(sw_hz, npoints)
         .into_iter()
         .map(|offset_hz| ProfilePoint {
             offset_hz,
-            m: final_magnetisation(pulse, tau_p, rf_hz, offset_hz),
+            m: final_magnetisation(pulse, tau_p, rf_hz, offset_hz, start),
         })
         .collect()
 }
 
-/// Final y magnetisation over resonance offset and field strength: the
-/// contour and mesh panels of `ESCALADE_Bloch_B1`.
+/// One component of the final magnetisation over resonance offset and field
+/// strength: the contour and mesh panels of `ESCALADE_Bloch_B1`, which show
+/// Iy from +z.
 #[derive(Debug, Clone, PartialEq)]
 pub struct B1Map {
     /// Offsets in Hz, one per column.
     pub offsets_hz: Vec<f64>,
     /// Field as a fraction of the nominal one, one per row.
     pub scales: Vec<f64>,
-    /// `iy[(row, column)]` for `scales[row]` and `offsets_hz[column]`.
-    pub iy: DMatrix<f64>,
+    /// `values[(row, column)]` for `scales[row]` and `offsets_hz[column]`.
+    pub values: DMatrix<f64>,
     /// Peak field the pulse reaches at the nominal amplitude, in Hz: the
     /// scripts' `RF_max`, which scales their offset axis.
     pub rf_max_hz: f64,
 }
 
-/// The offset-by-field map, over one and a half times the bandwidth and
-/// fields from half to one and a half times nominal.
-pub fn b1_map(pulse: &DMatrix<f64>, tau_p: f64, rf_hz: f64, sw_hz: f64, npoints: usize) -> B1Map {
+/// The offset-by-field map of magnetisation starting along `start`,
+/// projected on `along`, over one and a half times the bandwidth and fields
+/// from half to one and a half times nominal.
+///
+/// With `along` the target, one means the transfer succeeded.
+pub fn b1_map(
+    pulse: &DMatrix<f64>,
+    tau_p: f64,
+    rf_hz: f64,
+    sw_hz: f64,
+    npoints: usize,
+    start: Magnetisation,
+    along: Magnetisation,
+) -> B1Map {
     let offsets_hz = plot_offsets(sw_hz, npoints);
     let scales = b1_scales(npoints);
-    let iy = DMatrix::from_fn(scales.len(), offsets_hz.len(), |r, c| {
-        final_magnetisation(pulse, tau_p, rf_hz * scales[r], offsets_hz[c]).y
+    let values = DMatrix::from_fn(scales.len(), offsets_hz.len(), |r, c| {
+        final_magnetisation(pulse, tau_p, rf_hz * scales[r], offsets_hz[c], start).dot(&along)
     });
     B1Map {
         offsets_hz,
         scales,
-        iy,
+        values,
         rf_max_hz: rf_hz * max_amplitude(pulse),
     }
 }
 
-/// How fast the on-resonance phase moves with the field, in degrees per 1%
-/// of field, at fields from half to one and a half times nominal.
+/// How fast the on-resonance phase of magnetisation starting along `start`
+/// moves with the field, in degrees per 1% of field, at fields from half to
+/// one and a half times nominal.
 ///
 /// `(scale, dphi)` pairs: the phase at `1.005 scale` minus the phase at
-/// `0.995 scale`, wrapped into `[-180, 180]`, as `ESCALADE_Bloch_B1` draws it.
+/// `0.995 scale`, wrapped into `[-180, 180]`, as `ESCALADE_Bloch_B1` draws it
+/// from +z.
 pub fn phase_sensitivity(
     pulse: &DMatrix<f64>,
     tau_p: f64,
     rf_hz: f64,
     npoints: usize,
+    start: Magnetisation,
 ) -> Vec<(f64, f64)> {
     let phase = |scale: f64| {
-        let m = final_magnetisation(pulse, tau_p, rf_hz * scale, 0.0);
+        let m = final_magnetisation(pulse, tau_p, rf_hz * scale, 0.0, start);
         m.x.atan2(m.y).to_degrees()
     };
     b1_scales(npoints)
@@ -195,6 +224,11 @@ fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
 mod tests {
     use super::*;
 
+    const PLUS_X: Magnetisation = Magnetisation::new(1.0, 0.0, 0.0);
+    const PLUS_Y: Magnetisation = Magnetisation::new(0.0, 1.0, 0.0);
+    const PLUS_Z: Magnetisation = Magnetisation::new(0.0, 0.0, 1.0);
+    const MINUS_Y: Magnetisation = Magnetisation::new(0.0, -1.0, 0.0);
+
     /// A hard pulse along +x lasting a quarter period of its field.
     fn hard_90(n: usize) -> (DMatrix<f64>, f64, f64) {
         let rf = 10000.0;
@@ -205,12 +239,27 @@ mod tests {
         )
     }
 
+    fn close(a: Magnetisation, b: Magnetisation) -> bool {
+        (a.x - b.x).abs() < 1e-12 && (a.y - b.y).abs() < 1e-12 && (a.z - b.z).abs() < 1e-12
+    }
+
     #[test]
     fn a_hard_90_on_resonance_puts_z_onto_minus_y() {
         let (pulse, tau, rf) = hard_90(8);
-        let m = final_magnetisation(&pulse, tau, rf, 0.0);
-        assert!(m.x.abs() < 1e-12 && (m.y + 1.0).abs() < 1e-12 && m.z.abs() < 1e-12);
+        let m = final_magnetisation(&pulse, tau, rf, 0.0, PLUS_Z);
+        assert!(close(m, MINUS_Y), "{m:?}");
         assert!((m.transverse() - 1.0).abs() < 1e-12);
+    }
+
+    /// The whole rotation, not just what happens to z: x is the axis and
+    /// stays, y goes to z.
+    #[test]
+    fn a_hard_90_turns_every_start_about_x() {
+        let (pulse, tau, rf) = hard_90(8);
+        let from = |start| final_magnetisation(&pulse, tau, rf, 0.0, start);
+        assert!(close(from(PLUS_X), PLUS_X), "{:?}", from(PLUS_X));
+        assert!(close(from(PLUS_Y), PLUS_Z), "{:?}", from(PLUS_Y));
+        assert!((PLUS_Y.dot(&PLUS_Z)).abs() < 1e-15 && (MINUS_Y.dot(&MINUS_Y) - 1.0).abs() < 1e-15);
     }
 
     /// The amplitude is what the limit is judged against, so a NaN must not
@@ -226,14 +275,18 @@ mod tests {
     #[test]
     fn nothing_happens_without_a_pulse() {
         let pulse = DMatrix::zeros(4, 2);
-        let m = final_magnetisation(&pulse, 1e-3, 10000.0, 1234.0);
+        for start in [PLUS_X, PLUS_Y, PLUS_Z] {
+            let m = final_magnetisation(&pulse, 1e-3, 10000.0, 0.0, start);
+            assert!(close(m, start), "{m:?}");
+        }
+        let m = final_magnetisation(&pulse, 1e-3, 10000.0, 1234.0, PLUS_Z);
         assert!((m.z - 1.0).abs() < 1e-12 && m.transverse() < 1e-12);
     }
 
     #[test]
     fn the_grids_span_what_the_scripts_plot() {
         let (pulse, tau, rf) = hard_90(4);
-        let profile = offset_profile(&pulse, tau, rf, 20000.0, 11);
+        let profile = offset_profile(&pulse, tau, rf, 20000.0, 11, PLUS_Z);
         assert_eq!(profile.len(), 11);
         assert!((profile[0].offset_hz + 15000.0).abs() < 1e-9);
         assert!((profile[10].offset_hz - 15000.0).abs() < 1e-9);
@@ -243,12 +296,17 @@ mod tests {
             assert!((len - 1.0).abs() < 1e-12);
         }
 
-        let map = b1_map(&pulse, tau, rf, 20000.0, 9);
-        assert_eq!(map.iy.shape(), (9, 9));
+        let map = b1_map(&pulse, tau, rf, 20000.0, 9, PLUS_Z, MINUS_Y);
+        assert_eq!(map.values.shape(), (9, 9));
         assert!((map.scales[0] - 0.5).abs() < 1e-15 && (map.scales[8] - 1.5).abs() < 1e-15);
         assert!((map.rf_max_hz - rf).abs() < 1e-9);
-        // Centre of the map is the nominal field on resonance: -y.
-        assert!((map.iy[(4, 4)] + 1.0).abs() < 1e-12);
+        // Centre of the map is the nominal field on resonance, where z lands
+        // exactly on -y.
+        assert!((map.values[(4, 4)] - 1.0).abs() < 1e-12);
+        // Along +z from +y, the same point is the rotation's other
+        // perfect transfer.
+        let other = b1_map(&pulse, tau, rf, 20000.0, 9, PLUS_Y, PLUS_Z);
+        assert!((other.values[(4, 4)] - 1.0).abs() < 1e-12);
     }
 
     /// A hard pulse's on-resonance phase does not move with the field until
@@ -256,7 +314,7 @@ mod tests {
     #[test]
     fn phase_sensitivity_is_flat_for_a_hard_pulse_below_180() {
         let (pulse, tau, rf) = hard_90(4);
-        for (z, dphi) in phase_sensitivity(&pulse, tau, rf, 11) {
+        for (z, dphi) in phase_sensitivity(&pulse, tau, rf, 11, PLUS_Z) {
             assert!(dphi.abs() < 1e-9, "scale {z}: {dphi}");
         }
     }

@@ -7,6 +7,7 @@
 
 use nalgebra::DVector;
 use qoala::error::Result;
+use qoala::escalade::profile::Magnetisation;
 use qoala::escalade::{escalade, profile, Escalade, Optimised};
 use qoala::examples_io::write_waveform_csv;
 
@@ -55,7 +56,8 @@ fn report(spec: &Escalade, out: &Optimised) {
     let measured = (0..n)
         .map(|i| {
             let offset = -spec.sw / 2.0 + spec.sw * i as f64 / (n - 1) as f64;
-            -profile::final_magnetisation(&out.pulse, spec.tau_p, spec.rf[0], offset).y
+            let z = Magnetisation::new(0.0, 0.0, 1.0);
+            -profile::final_magnetisation(&out.pulse, spec.tau_p, spec.rf[0], offset, z).y
         })
         .sum::<f64>()
         / n as f64;

@@ -136,6 +136,20 @@ fn the_escalade_default_converges() {
     assert_eq!(done.waveform[0].len(), 2);
 }
 
+/// The universal rotation preset reaches its target too, as three transfers.
+#[test]
+fn the_universal_rotation_preset_converges() {
+    let setup = presets::escalade_universal_rotation();
+    let out = run(&Problem::Escalade(setup.clone()));
+    let done = finished(&out, "universal rotation");
+    assert!(
+        done.fidelity >= setup.target_fidelity,
+        "fidelity only reached {}",
+        done.fidelity
+    );
+    assert_eq!(done.waveform.len(), setup.nslices);
+}
+
 /// A setup the interface would refuse must be refused here too, with a
 /// message rather than a panic.
 #[test]
@@ -148,6 +162,11 @@ fn an_impossible_setup_fails_with_a_message() {
     let mut escalade = presets::escalade_b1_sensitive();
     escalade.to = escalade.from;
     let out = run(&Problem::Escalade(escalade));
+    assert!(matches!(out.messages.first(), Some(RunMessage::Failed(_))));
+
+    let mut rotation = presets::escalade_universal_rotation();
+    rotation.rotation[1] = rotation.rotation[0];
+    let out = run(&Problem::Escalade(rotation));
     assert!(matches!(out.messages.first(), Some(RunMessage::Failed(_))));
 }
 

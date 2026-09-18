@@ -25,6 +25,33 @@ pub enum States {
     PerSpin(Vec<Op2>),
 }
 
+/// What the pulse has to do.
+///
+/// `S` is how the states of a transfer are held: [`States`] in a problem
+/// description, one operator per spin once resolved into [`Settings`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Goal<S = States> {
+    /// Take each spin from an initial state to a target state, as the MATLAB
+    /// does.  The fidelity is `Re tr(target^dagger rho)`, summed over spins.
+    Transfer {
+        /// Initial states.
+        initial: S,
+        /// Target states.
+        target: S,
+    },
+    /// Give every spin the same propagator `W`, whatever state it starts in:
+    /// a universal rotation, built with [`rotation`].  `W` has to be in
+    /// SU(2).
+    ///
+    /// The fidelity is `Re tr(W^dagger U) / 2`, averaged over spins.  It
+    /// tells `U` from `-U`, which turn every axis alike: one of them turns
+    /// it an extra 360 degrees.  A fidelity that did not - the three
+    /// transfers x, y and z to their images, say - would let parts of the
+    /// band settle on opposite signs, with the spins between them stuck 180
+    /// degrees from the target where its gradient vanishes.
+    Rotation(Op2),
+}
+
 /// Magnetisation along `(x, y, z)`, normalised to unit spectral norm.
 ///
 /// `magnetisation(0.0, 0.0, 1.0)` is the default initial state and
@@ -38,6 +65,24 @@ pub fn magnetisation(x: f64, y: f64, z: f64) -> Op2 {
     spin_operator([2.0 * x / norm, 2.0 * y / norm, 2.0 * z / norm])
 }
 
+/// The SU(2) propagator turning every axis by `angle` radians about `axis`,
+/// right-handed: `exp(-i angle n.sigma / 2)`, with `n` the unit axis.
+///
+/// It is the propagator of a hard pulse along the axis: `rotation([1.0, 0.0,
+/// 0.0], FRAC_PI_2)` takes z to -y, as a 90-degree pulse along +x does.
+/// Angles a full turn apart give the two signs of the same rotation.  A zero
+/// axis gives the identity.
+pub fn rotation(axis: [f64; 3], angle: f64) -> Op2 {
+    let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if norm == 0.0 {
+        return Op2::identity();
+    }
+    let n_sigma = spin_operator(axis.map(|a| 2.0 * a / norm));
+    let half = angle / 2.0;
+    Op2::identity() * num_complex::Complex64::new(half.cos(), 0.0)
+        - n_sigma * num_complex::Complex64::new(0.0, half.sin())
+}
+
 /// An ESCALADE problem: a band of uncoupled spins, one x/y pulse to act on
 /// all of them.
 ///
@@ -46,7 +91,7 @@ pub fn magnetisation(x: f64, y: f64, z: f64) -> Op2 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Escalade {
     /// Number of spins spread across the bandwidth (`nspins`).  Ignored when
-    /// `offsets`, or per-spin states, say otherwise.
+    /// `offsets`, or per-spin states of a transfer, say otherwise.
     pub nspins: usize,
     /// Number of pulse points (`np_pulse`).  Ignored when `start` is given.
     pub np_pulse: usize,
@@ -63,10 +108,9 @@ pub struct Escalade {
     /// Explicit resonance offsets in Hz, overruling `sw` and `nspins`.  The
     /// MATLAB `Om` takes these in rad/s.
     pub offsets: Option<Vec<f64>>,
-    /// Initial states.
-    pub initial: States,
-    /// Target states.
-    pub target: States,
+    /// What the pulse has to do: a state-to-state transfer (the MATLAB's
+    /// `init` and `target`) or a universal rotation.
+    pub goal: Goal,
     /// Starting pulse, `np x 2` (`F0`, `G0`); random in `[0, 1)` when absent.
     pub start: Option<DMatrix<f64>>,
     /// Seed for the random starting pulse.
@@ -99,8 +143,10 @@ impl Default for Escalade {
             rf_weights: None,
             sw: 20000.0,
             offsets: None,
-            initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
-            target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+            goal: Goal::Transfer {
+                initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
+                target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+            },
             start: None,
             seed: None,
             use_hessian: false,
@@ -129,10 +175,9 @@ pub struct Settings {
     pub rf: Vec<f64>,
     /// Weight of each amplitude, summing to one.
     pub rf_weights: Vec<f64>,
-    /// Initial state of each spin (`fullinit`).
-    pub initial: Vec<Op2>,
-    /// Target state of each spin (`fulltarget`).
-    pub target: Vec<Op2>,
+    /// What the pulse has to do: for a transfer, the initial and target
+    /// state of each spin (`fullinit` and `fulltarget`).
+    pub goal: Goal<Vec<Op2>>,
     /// Starting pulse, `np_pulse x 2`.
     pub start: DMatrix<f64>,
     /// Use the analytic Hessian.
@@ -150,9 +195,13 @@ impl Escalade {
     pub fn resolve(&self) -> Result<Settings> {
         // Per-spin states and explicit offsets each dictate the spin count,
         // and have to agree when more than one does.
+        let (initial, target) = match &self.goal {
+            Goal::Transfer { initial, target } => (per_spin_len(initial), per_spin_len(target)),
+            Goal::Rotation(_) => (None, None),
+        };
         let dictated: Vec<(&str, usize)> = [
-            ("initial states", per_spin_len(&self.initial)),
-            ("target states", per_spin_len(&self.target)),
+            ("initial states", initial),
+            ("target states", target),
             ("offsets", self.offsets.as_ref().map(Vec::len)),
         ]
         .into_iter()
@@ -171,8 +220,22 @@ impl Escalade {
             return Err(bad!("at least one spin is needed"));
         }
 
-        let initial = expand(&self.initial, nspins, "initial")?;
-        let target = expand(&self.target, nspins, "target")?;
+        let goal = match &self.goal {
+            Goal::Transfer { initial, target } => Goal::Transfer {
+                initial: expand(initial, nspins, "initial")?,
+                target: expand(target, nspins, "target")?,
+            },
+            Goal::Rotation(w) => {
+                let unitary = (w.adjoint() * w - Op2::identity()).norm() < 1e-10;
+                let det = w.determinant() - num_complex::Complex64::new(1.0, 0.0);
+                if !(unitary && det.norm() < 1e-10) {
+                    return Err(bad!(
+                        "the rotation must be in SU(2): unitary, with determinant one"
+                    ));
+                }
+                Goal::Rotation(*w)
+            }
+        };
 
         let two_pi = 2.0 * std::f64::consts::PI;
         let offsets: Vec<f64> = match &self.offsets {
@@ -247,8 +310,7 @@ impl Escalade {
             offsets,
             rf: self.rf.clone(),
             rf_weights,
-            initial,
-            target,
+            goal,
             start,
             use_hessian: self.use_hessian,
             max_iter: self.max_iter,
@@ -329,8 +391,43 @@ mod tests {
         assert!(s.start.iter().all(|v| (0.0..1.0).contains(v)));
 
         // A unit state spread over every spin gives a maximum fidelity of one.
-        let total: f64 = s.initial.iter().map(|r| (r.adjoint() * r).trace().re).sum();
+        let Goal::Transfer { initial, .. } = &s.goal else {
+            panic!("the default is a transfer");
+        };
+        let total: f64 = initial.iter().map(|r| (r.adjoint() * r).trace().re).sum();
         assert!((total - 1.0).abs() < 1e-12);
+    }
+
+    /// `rotation` is the propagator of a hard pulse: 90 degrees about +x
+    /// takes z to -y and y to z, and the axis need not be a unit vector.
+    #[test]
+    fn a_rotation_turns_the_axes_as_a_hard_pulse_does() {
+        let w = rotation([2.0, 0.0, 0.0], std::f64::consts::FRAC_PI_2);
+        let turn = |a: [f64; 3]| w * magnetisation(a[0], a[1], a[2]) * w.adjoint();
+        assert!((turn([0.0, 0.0, 1.0]) - magnetisation(0.0, -1.0, 0.0)).norm() < 1e-15);
+        assert!((turn([0.0, 1.0, 0.0]) - magnetisation(0.0, 0.0, 1.0)).norm() < 1e-15);
+        assert!((turn([1.0, 0.0, 0.0]) - magnetisation(1.0, 0.0, 0.0)).norm() < 1e-15);
+        assert!((w.adjoint() * w - Op2::identity()).norm() < 1e-15);
+        assert!((w.determinant() - num_complex::Complex64::new(1.0, 0.0)).norm() < 1e-15);
+    }
+
+    #[test]
+    fn a_rotation_goal_has_to_be_in_su2() {
+        let w = rotation([0.0, 1.0, 1.0], 2.0);
+        let spec = |goal| Escalade {
+            offsets: Some(vec![-100.0, 0.0, 100.0]),
+            goal,
+            seed: Some(8),
+            ..Default::default()
+        };
+        let s = spec(Goal::Rotation(w)).resolve().unwrap();
+        assert_eq!((s.nspins, s.goal), (3, Goal::Rotation(w)));
+
+        let i = num_complex::Complex64::new(0.0, 1.0);
+        // Unitary but with determinant -1, and not unitary at all.
+        for bad in [w * i, w * num_complex::Complex64::new(2.0, 0.0)] {
+            assert!(spec(Goal::Rotation(bad)).resolve().is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -343,7 +440,10 @@ mod tests {
         .resolve()
         .unwrap();
         assert_eq!(s.nspins, 3);
-        assert_eq!(s.initial.len(), 3);
+        let Goal::Transfer { initial, target } = &s.goal else {
+            panic!("the default is a transfer");
+        };
+        assert_eq!((initial.len(), target.len()), (3, 3));
     }
 
     #[test]
@@ -366,7 +466,10 @@ mod tests {
     fn disagreeing_spin_counts_are_refused() {
         let spec = Escalade {
             offsets: Some(vec![0.0, 1.0]),
-            target: States::PerSpin(vec![magnetisation(1.0, 0.0, 0.0); 3]),
+            goal: Goal::Transfer {
+                initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
+                target: States::PerSpin(vec![magnetisation(1.0, 0.0, 0.0); 3]),
+            },
             ..Default::default()
         };
         assert!(spec.resolve().is_err());
@@ -390,7 +493,10 @@ mod tests {
         let mut op = magnetisation(0.0, 0.0, 1.0);
         op[(0, 1)] = num_complex::Complex64::new(0.3, 0.0);
         let spec = Escalade {
-            initial: States::Single(op),
+            goal: Goal::Transfer {
+                initial: States::Single(op),
+                target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+            },
             ..Default::default()
         };
         assert!(spec.resolve().is_err());

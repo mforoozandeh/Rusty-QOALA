@@ -16,8 +16,13 @@
 //! MATLAB's arrangement: the upper triangle and the diagonal of each of the
 //! four control blocks are computed and the lower triangle is mirrored.
 //!
-//! The sign is the MATLAB's: `fmincon` minimises, so a perfect transfer has a
-//! value of minus one.
+//! A universal rotation towards the propagator `W`, which the MATLAB does not
+//! have, is scored on the propagator itself: each spin adds
+//! `-w_r Re tr(W^dagger U) / (2 nspins)`, whose gradient is
+//! `-w_r Im tr(L_n U W^dagger) / (2 nspins)`.
+//!
+//! The sign is the MATLAB's: `fmincon` minimises, so a perfect transfer or
+//! rotation has a value of minus one.
 //!
 //! Where the MATLAB's `parfor` runs the fields in parallel and each field's
 //! spins in one vectorised block, here every (field, spin) pair is a work
@@ -35,8 +40,8 @@
 //! a value or gradient evaluation, and the value it returns can differ from
 //! theirs in the last digit.
 
-use super::propagators::{slice, trajectory, Op2, Slice};
-use super::settings::Settings;
+use super::propagators::{slice, trajectory, Op2, Slice, Trajectory};
+use super::settings::{Goal, Settings};
 use crate::error::{QoalaError, Result};
 use crate::optim::ObjectiveRequest;
 use crate::parallel;
@@ -157,10 +162,18 @@ fn add_spin(
         })
         .collect();
     let traj = trajectory(&slices);
+    match &settings.goal {
+        Goal::Transfer { initial, target } => add_transfer(acc, &traj, &initial[p], &target[p], w),
+        Goal::Rotation(target) => add_rotation(acc, &traj, target, w / settings.nspins as f64),
+    }
+}
 
+/// Add one spin's contribution to a transfer from `r0` to `rt`, at weight
+/// `w`.
+fn add_transfer(acc: &mut Evaluation, traj: &Trajectory, r0: &Op2, target: &Op2, w: f64) {
+    let n = traj.first.len();
     let ut = traj.total;
-    let r0 = settings.initial[p];
-    let rtc = settings.target[p].adjoint();
+    let rtc = target.adjoint();
     let rt = ut * r0 * ut.adjoint();
     let rr = rt * rtc;
 
@@ -178,7 +191,76 @@ fn add_spin(
     }
 }
 
-/// Add one spin's contribution to the Hessian.
+/// Add one spin's contribution to a rotation towards the propagator
+/// `target`, at weight `w`: `-w Re tr(W^dagger U) / 2`.
+fn add_rotation(acc: &mut Evaluation, traj: &Trajectory, target: &Op2, w: f64) {
+    let n = traj.first.len();
+    let scale = w / 2.0;
+    // tr(W^dagger U) = tr(U W^dagger), and every derivative of U is an
+    // operator times U, so U W^dagger is all the target is needed as.
+    let uw = traj.total * target.adjoint();
+
+    acc.value -= scale * uw.trace().re;
+
+    if let Some(gr) = acc.grad.as_mut() {
+        // dU = -i L U: d Re tr(U W^dagger) = Im tr(L U W^dagger).
+        for (k, [lf, lg]) in traj.first.iter().enumerate() {
+            gr[k] -= scale * (lf * uw).trace().im;
+            gr[n + k] -= scale * (lg * uw).trace().im;
+        }
+    }
+
+    if let Some(h) = acc.hess.as_mut() {
+        rotation_hessian(h, &traj.first, &traj.second, &uw, scale);
+    }
+}
+
+/// Add one spin's contribution to a rotation's Hessian, with `uw` the
+/// propagator times the target's adjoint.
+///
+/// For slice `m` after slice `k`, `d2U = -L_m L_k U`, so the entry is
+/// `scale Re tr(L_k U W^dagger L_m)`.  Within a slice the second derivative
+/// adds `-(i L dX L^dagger) U`.
+fn rotation_hessian(
+    h: &mut DMatrix<f64>,
+    first: &[[Op2; 2]],
+    second: &[[Op2; 4]],
+    uw: &Op2,
+    scale: f64,
+) {
+    let n = first.len();
+    let term = |a: &Op2, b: &Op2| scale * (a * b).trace().re;
+
+    for m in 0..n {
+        let [lmf, lmg] = &first[m];
+        // One product per control of slice m rather than per (k, m).
+        let q_mf = uw * lmf;
+        let q_mg = uw * lmg;
+
+        for (k, [lkf, lkg]) in first.iter().enumerate().take(m) {
+            let ff = term(lkf, &q_mf);
+            let fg = term(lkf, &q_mg);
+            let gf = term(lkg, &q_mf);
+            let gg = term(lkg, &q_mg);
+            h[(k, m)] += ff;
+            h[(m, k)] += ff;
+            h[(k, n + m)] += fg;
+            h[(n + m, k)] += fg;
+            h[(n + k, m)] += gf;
+            h[(m, n + k)] += gf;
+            h[(n + k, n + m)] += gg;
+            h[(n + m, n + k)] += gg;
+        }
+
+        let [dff, dfg, dgf, dgg] = &second[m];
+        h[(m, m)] += term(lmf, &q_mf) + term(dff, uw);
+        h[(m, n + m)] += term(lmf, &q_mg) + term(dfg, uw);
+        h[(n + m, m)] += term(lmg, &q_mf) + term(dgf, uw);
+        h[(n + m, n + m)] += term(lmg, &q_mg) + term(dgg, uw);
+    }
+}
+
+/// Add one spin's contribution to a transfer's Hessian.
 fn hessian_terms(
     h: &mut DMatrix<f64>,
     first: &[[Op2; 2]],
@@ -223,12 +305,23 @@ fn hessian_terms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::escalade::settings::{magnetisation, Escalade, States};
+    use crate::escalade::settings::{magnetisation, rotation, Escalade, Goal, States};
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    const X: [f64; 3] = [1.0, 0.0, 0.0];
+
+    /// z to -y.
+    fn excitation() -> Goal {
+        Goal::Transfer {
+            initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
+            target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+        }
+    }
 
     /// A small problem with two fields of unequal weight, spins either side
     /// of resonance including one exactly on it, and a pulse that is not
     /// special anywhere.
-    fn small() -> (Settings, DMatrix<f64>) {
+    fn small_with(goal: Goal) -> (Settings, DMatrix<f64>) {
         let spec = Escalade {
             nspins: 4,
             np_pulse: 6,
@@ -236,14 +329,45 @@ mod tests {
             rf: vec![15000.0, 19000.0],
             rf_weights: Some(vec![1.0, 2.0]),
             offsets: Some(vec![-8000.0, 0.0, 3000.0, 9500.0]),
-            initial: States::Single(magnetisation(0.0, 0.0, 1.0)),
-            target: States::Single(magnetisation(0.0, -1.0, 0.0)),
+            goal,
             seed: Some(11),
             ..Default::default()
         };
         let s = spec.resolve().unwrap();
         let pulse = DMatrix::from_fn(6, 2, |r, c| 0.8 * ((1.3 + c as f64) * r as f64 + 0.4).sin());
         (s, pulse)
+    }
+
+    fn small() -> (Settings, DMatrix<f64>) {
+        small_with(excitation())
+    }
+
+    /// Both small problems: a transfer, and a rotation about an axis that
+    /// is not special either.
+    fn both_small() -> [(Settings, DMatrix<f64>); 2] {
+        [
+            small(),
+            small_with(Goal::Rotation(rotation([0.3, -0.5, 0.8], 1.9))),
+        ]
+    }
+
+    /// A single spin on resonance under a hard 90-degree pulse about +x.
+    fn hard_90(goal: Goal) -> Settings {
+        let rf = 10000.0;
+        Escalade {
+            offsets: Some(vec![0.0]),
+            rf: vec![rf],
+            tau_p: 0.25 / rf,
+            goal,
+            start: Some(DMatrix::from_fn(
+                5,
+                2,
+                |_, c| if c == 0 { 1.0 } else { 0.0 },
+            )),
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap()
     }
 
     fn value(s: &Settings, p: &DMatrix<f64>) -> f64 {
@@ -259,47 +383,50 @@ mod tests {
 
     #[test]
     fn the_gradient_matches_finite_differences() {
-        let (s, p) = small();
-        let g = gradhess(&s, &p, ObjectiveRequest::Gradient)
-            .unwrap()
-            .grad
-            .unwrap();
-        let h = 1e-6;
-        for i in 0..g.len() {
-            let fd = (value(&s, &nudge(&p, i, h)) - value(&s, &nudge(&p, i, -h))) / (2.0 * h);
-            assert!((g[i] - fd).abs() < 1e-7, "parameter {i}: {} vs {fd}", g[i]);
+        for (s, p) in both_small() {
+            let g = gradhess(&s, &p, ObjectiveRequest::Gradient)
+                .unwrap()
+                .grad
+                .unwrap();
+            let h = 1e-6;
+            for i in 0..g.len() {
+                let fd = (value(&s, &nudge(&p, i, h)) - value(&s, &nudge(&p, i, -h))) / (2.0 * h);
+                assert!((g[i] - fd).abs() < 1e-7, "parameter {i}: {} vs {fd}", g[i]);
+            }
         }
     }
 
     #[test]
     fn the_hessian_matches_finite_differences_of_the_gradient() {
-        let (s, p) = small();
-        let eval = gradhess(&s, &p, ObjectiveRequest::Hessian).unwrap();
-        let hess = eval.hess.unwrap();
-        let grad = |q: &DMatrix<f64>| {
-            gradhess(&s, q, ObjectiveRequest::Gradient)
-                .unwrap()
-                .grad
-                .unwrap()
-        };
-        let h = 1e-5;
-        let dim = hess.nrows();
-        for j in 0..dim {
-            let col = (grad(&nudge(&p, j, h)) - grad(&nudge(&p, j, -h))) / (2.0 * h);
-            for i in 0..dim {
-                assert!(
-                    (hess[(i, j)] - col[i]).abs() < 1e-6,
-                    "entry ({i}, {j}): {} vs {}",
-                    hess[(i, j)],
-                    col[i]
-                );
+        for (s, p) in both_small() {
+            let eval = gradhess(&s, &p, ObjectiveRequest::Hessian).unwrap();
+            let hess = eval.hess.unwrap();
+            let grad = |q: &DMatrix<f64>| {
+                gradhess(&s, q, ObjectiveRequest::Gradient)
+                    .unwrap()
+                    .grad
+                    .unwrap()
+            };
+            let h = 1e-5;
+            let dim = hess.nrows();
+            for j in 0..dim {
+                let col = (grad(&nudge(&p, j, h)) - grad(&nudge(&p, j, -h))) / (2.0 * h);
+                for i in 0..dim {
+                    assert!(
+                        (hess[(i, j)] - col[i]).abs() < 1e-6,
+                        "entry ({i}, {j}): {} vs {}",
+                        hess[(i, j)],
+                        col[i]
+                    );
+                }
             }
+            // The same value and gradient come back whatever order is asked
+            // for: a pulse this short is cut into the same pieces at every
+            // order.
+            let lower = gradhess(&s, &p, ObjectiveRequest::Gradient).unwrap();
+            assert_eq!(eval.value, lower.value);
+            assert_eq!(eval.grad.unwrap(), lower.grad.unwrap());
         }
-        // The same value and gradient come back whatever order is asked for:
-        // a pulse this short is cut into the same pieces at every order.
-        let lower = gradhess(&s, &p, ObjectiveRequest::Gradient).unwrap();
-        assert_eq!(eval.value, lower.value);
-        assert_eq!(eval.grad.unwrap(), lower.grad.unwrap());
     }
 
     /// Long pulses are cut into fewer pieces, keeping their accumulators
@@ -334,20 +461,21 @@ mod tests {
     #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
     #[test]
     fn the_thread_count_does_not_change_the_evaluation() {
-        let (s, p) = small();
-        let on = |threads| {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap()
-                .install(|| gradhess(&s, &p, ObjectiveRequest::Hessian).unwrap())
-        };
-        let one = on(1);
-        for threads in [2, 5] {
-            let many = on(threads);
-            assert_eq!(one.value.to_bits(), many.value.to_bits());
-            assert_eq!(one.grad, many.grad);
-            assert_eq!(one.hess, many.hess);
+        for (s, p) in both_small() {
+            let on = |threads| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap()
+                    .install(|| gradhess(&s, &p, ObjectiveRequest::Hessian).unwrap())
+            };
+            let one = on(1);
+            for threads in [2, 5] {
+                let many = on(threads);
+                assert_eq!(one.value.to_bits(), many.value.to_bits());
+                assert_eq!(one.grad, many.grad);
+                assert_eq!(one.hess, many.hess);
+            }
         }
     }
 
@@ -360,23 +488,25 @@ mod tests {
         assert!(value(&s, &DMatrix::zeros(6, 2)).abs() < 1e-12);
 
         // A single on-resonance spin, 90 degrees about +x: z goes to -y.
-        let rf = 10000.0;
-        let n = 5;
-        let tau = 0.25 / rf; // omega1 tau = pi/2
-        let one = Escalade {
-            offsets: Some(vec![0.0]),
-            rf: vec![rf],
-            tau_p: tau,
-            start: Some(DMatrix::from_fn(
-                n,
-                2,
-                |_, c| if c == 0 { 1.0 } else { 0.0 },
-            )),
-            ..Default::default()
-        }
-        .resolve()
-        .unwrap();
+        let one = hard_90(excitation());
         let v = value(&one, &one.start);
         assert!((v + 1.0).abs() < 1e-12, "value {v}");
+    }
+
+    /// The same hard pulse is exactly the rotation by 90 degrees about +x,
+    /// is 90 degrees away from the rotation by -90, and is the opposite lift
+    /// of the rotation by 90 + 360 degrees: the same turn of every axis, but
+    /// the propagator's other sign, which a rotation goal tells apart.
+    #[test]
+    fn a_hard_90_is_the_rotation_about_x_and_not_its_other_lift() {
+        for (angle, want) in [
+            (FRAC_PI_2, -1.0),
+            (-FRAC_PI_2, 0.0),
+            (FRAC_PI_2 + 2.0 * PI, 1.0),
+        ] {
+            let s = hard_90(Goal::Rotation(rotation(X, angle)));
+            let v = value(&s, &s.start);
+            assert!((v - want).abs() < 1e-12, "angle {angle}: value {v}");
+        }
     }
 }

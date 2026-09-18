@@ -11,8 +11,13 @@
 
 use nalgebra::{DMatrix, DVector};
 use qoala::error::Result;
+use qoala::escalade::profile::Magnetisation;
 use qoala::escalade::{escalade, profile, Escalade, Optimised};
 use qoala::examples_io::{write_table_csv, write_waveform_csv};
+
+/// The scripts start from +z and plot Iy.
+const PLUS_Z: Magnetisation = Magnetisation::new(0.0, 0.0, 1.0);
+const PLUS_Y: Magnetisation = Magnetisation::new(0.0, 1.0, 0.0);
 
 fn main() -> Result<()> {
     let rf = 17000.0;
@@ -70,7 +75,7 @@ fn band_fidelity(spec: &Escalade, out: &Optimised, rf_hz: f64) -> f64 {
     (0..n)
         .map(|i| {
             let offset = -spec.sw / 2.0 + spec.sw * i as f64 / (n - 1) as f64;
-            -profile::final_magnetisation(&out.pulse, spec.tau_p, rf_hz, offset).y
+            -profile::final_magnetisation(&out.pulse, spec.tau_p, rf_hz, offset, PLUS_Z).y
         })
         .sum::<f64>()
         / n as f64
@@ -89,7 +94,7 @@ fn write_outputs(name: &str, spec: &Escalade, out: &Optimised, rf: f64) -> Resul
     )?;
 
     let rows: Vec<Vec<f64>> =
-        profile::offset_profile(&out.pulse, spec.tau_p, rf, spec.sw, spec.nspins)
+        profile::offset_profile(&out.pulse, spec.tau_p, rf, spec.sw, spec.nspins, PLUS_Z)
             .iter()
             .map(|p| {
                 vec![
@@ -108,7 +113,15 @@ fn write_outputs(name: &str, spec: &Escalade, out: &Optimised, rf: f64) -> Resul
         &rows,
     )?;
 
-    let map = profile::b1_map(&out.pulse, spec.tau_p, rf, spec.sw, spec.nspins);
+    let map = profile::b1_map(
+        &out.pulse,
+        spec.tau_p,
+        rf,
+        spec.sw,
+        spec.nspins,
+        PLUS_Z,
+        PLUS_Y,
+    );
     let mut rows = Vec::new();
     for (r, scale) in map.scales.iter().enumerate() {
         for (c, offset) in map.offsets_hz.iter().enumerate() {
@@ -116,7 +129,7 @@ fn write_outputs(name: &str, spec: &Escalade, out: &Optimised, rf: f64) -> Resul
                 *scale,
                 *offset,
                 offset / map.rf_max_hz,
-                map.iy[(r, c)],
+                map.values[(r, c)],
             ]);
         }
     }
@@ -126,10 +139,11 @@ fn write_outputs(name: &str, spec: &Escalade, out: &Optimised, rf: f64) -> Resul
         &rows,
     )?;
 
-    let rows: Vec<Vec<f64>> = profile::phase_sensitivity(&out.pulse, spec.tau_p, rf, spec.nspins)
-        .into_iter()
-        .map(|(scale, dphi)| vec![scale, dphi])
-        .collect();
+    let rows: Vec<Vec<f64>> =
+        profile::phase_sensitivity(&out.pulse, spec.tau_p, rf, spec.nspins, PLUS_Z)
+            .into_iter()
+            .map(|(scale, dphi)| vec![scale, dphi])
+            .collect();
     write_table_csv(
         format!("escalade_{name}_dphi_db1.csv"),
         &["b1_scale", "dphi_deg"],

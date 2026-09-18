@@ -1,11 +1,14 @@
-//! ESCALADE end to end: convergence, the amplitude limit, B1 compensation,
-//! progress reporting and cancellation.
+//! ESCALADE end to end: convergence, universal rotations, the amplitude
+//! limit, B1 compensation, progress reporting and cancellation.
 //!
 //! The fidelity each run reports is checked against an independent
 //! measurement of what its pulse does to magnetisation, so a run cannot pass
 //! by agreeing with itself.
 
-use qoala::escalade::{escalade, escalade_with_progress, profile, Escalade, Optimised};
+use qoala::escalade::profile::Magnetisation;
+use qoala::escalade::{
+    escalade, escalade_with_progress, profile, rotation, Escalade, Goal, Optimised,
+};
 use qoala::optim::{IterationReport, ProgressSink};
 use qoala::types::ExitFlag;
 
@@ -36,14 +39,103 @@ fn offsets(spec: &Escalade) -> Vec<f64> {
         .collect()
 }
 
-/// Mean of -Iy over the band at a field of `scale` times nominal: the
-/// fidelity, measured from the magnetisation rather than the objective.
+const PLUS_X: Magnetisation = Magnetisation::new(1.0, 0.0, 0.0);
+const PLUS_Y: Magnetisation = Magnetisation::new(0.0, 1.0, 0.0);
+const PLUS_Z: Magnetisation = Magnetisation::new(0.0, 0.0, 1.0);
+const MINUS_Y: Magnetisation = Magnetisation::new(0.0, -1.0, 0.0);
+
+/// The default transfer, z to -y.
+const EXCITATION: [(Magnetisation, Magnetisation); 1] = [(PLUS_Z, MINUS_Y)];
+
+/// A universal 90-degree rotation about x, axis by axis.
+const ROTATION_ABOUT_X: [(Magnetisation, Magnetisation); 3] =
+    [(PLUS_X, PLUS_X), (PLUS_Y, PLUS_Z), (PLUS_Z, MINUS_Y)];
+
+fn about_x() -> Goal {
+    Goal::Rotation(rotation([1.0, 0.0, 0.0], std::f64::consts::FRAC_PI_2))
+}
+
+/// How far the magnetisation lands along its target at each offset,
+/// averaged over the transfers, at a field of `scale` times nominal.
+fn per_offset(
+    spec: &Escalade,
+    out: &Optimised,
+    scale: f64,
+    pairs: &[(Magnetisation, Magnetisation)],
+) -> Vec<f64> {
+    let rf = spec.rf[0] * scale;
+    offsets(spec)
+        .into_iter()
+        .map(|o| {
+            pairs
+                .iter()
+                .map(|&(from, to)| {
+                    profile::final_magnetisation(&out.pulse, spec.tau_p, rf, o, from).dot(&to)
+                })
+                .sum::<f64>()
+                / pairs.len() as f64
+        })
+        .collect()
+}
+
+fn mean(v: &[f64]) -> f64 {
+    v.iter().sum::<f64>() / v.len() as f64
+}
+
+/// How far the magnetisation lands along its target, averaged over the band
+/// and the transfers: the fidelity, measured from the magnetisation rather
+/// than the objective.
+fn measured(
+    spec: &Escalade,
+    out: &Optimised,
+    scale: f64,
+    pairs: &[(Magnetisation, Magnetisation)],
+) -> f64 {
+    mean(&per_offset(spec, out, scale, pairs))
+}
+
+/// The excitation fidelity, measured.
 fn measured_fidelity(spec: &Escalade, out: &Optimised, scale: f64) -> f64 {
-    let offs = offsets(spec);
-    offs.iter()
-        .map(|&o| -profile::final_magnetisation(&out.pulse, spec.tau_p, spec.rf[0] * scale, o).y)
-        .sum::<f64>()
-        / offs.len() as f64
+    measured(spec, out, scale, &EXCITATION)
+}
+
+/// A rotation's fidelity, measured from what it does to x, y and z.
+///
+/// Where the three transfers average `F`, the rotation is `acos((3F - 1) /
+/// 2)` from its target, so the propagator overlap `Re tr(W^dagger U) / 2`
+/// is `sqrt((3F + 1) / 4)` - provided the propagator has the target's sign,
+/// which magnetisation cannot show.  So this agrees with the objective only
+/// if no part of the band settled on the other sign.
+fn measured_rotation(spec: &Escalade, out: &Optimised) -> f64 {
+    let overlaps: Vec<f64> = per_offset(spec, out, 1.0, &ROTATION_ABOUT_X)
+        .into_iter()
+        .map(|f| ((3.0 * f + 1.0) / 4.0).sqrt())
+        .collect();
+    mean(&overlaps)
+}
+
+/// A rotation reached its target, by its own account and by what it does to
+/// every axis.
+fn rotated(spec: &Escalade, out: &Optimised) {
+    assert_eq!(out.exitflag, ExitFlag::FidelityTolerance, "{out:?}");
+    assert!(
+        (measured_rotation(spec, out) - out.fidelity).abs() < 1e-9,
+        "the objective and the magnetisation disagree"
+    );
+    // Each axis gets there, not just the average: a rotation `theta` from
+    // its target moves no axis further than `cos theta = 2 a^2 - 1` from
+    // where it should be, and averaged over the band that is at least
+    // `2 F^2 - 1` for a fidelity `F`.
+    let worst = 2.0 * out.fidelity * out.fidelity - 1.0;
+    for pair in ROTATION_ABOUT_X {
+        let each = measured(spec, out, 1.0, &[pair]);
+        assert!(each >= worst - 1e-9, "{pair:?}: {each} below {worst}");
+    }
+    assert!(
+        out.max_amplitude <= AMPLITUDE_LIMIT,
+        "{}",
+        out.max_amplitude
+    );
 }
 
 fn converges(use_hessian: bool) {
@@ -70,6 +162,40 @@ fn broadband_excitation_converges_with_the_hessian() {
 #[test]
 fn broadband_excitation_converges_on_the_gradient_alone() {
     converges(false);
+}
+
+/// A broadband universal rotation: every axis turned 90 degrees about x by
+/// the one pulse, not just z brought down onto -y.
+#[test]
+fn a_universal_rotation_converges() {
+    let spec = Escalade {
+        nspins: 21,
+        sw: 10000.0,
+        tau_p: 200e-6,
+        np_pulse: 60,
+        goal: about_x(),
+        ..broadband(true)
+    };
+    rotated(&spec, &escalade(&spec).unwrap());
+}
+
+/// A rotation across a band nearly twice the field.  Scored on the three
+/// transfers x, y and z, every start tried settled at a fidelity of 0.638,
+/// with the propagator's sign flipped across the outer part of the band and
+/// the spins at the boundary turned 180 degrees from the target.
+#[test]
+fn a_wide_band_rotation_does_not_split_into_opposite_signs() {
+    let spec = Escalade {
+        nspins: 51,
+        sw: 30000.0,
+        tau_p: 200e-6,
+        np_pulse: 100,
+        goal: about_x(),
+        max_iter: 2000,
+        seed: Some(3),
+        ..broadband(false)
+    };
+    rotated(&spec, &escalade(&spec).unwrap());
 }
 
 /// A starting pulse reaching twice the amplitude limit is pulled back inside

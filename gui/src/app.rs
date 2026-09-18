@@ -3,7 +3,7 @@
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotImage, PlotPoint, PlotPoints};
 
-use crate::escalade::{self, Analysis, Direction, EscaladeSetup};
+use crate::escalade::{self, Analysis, Direction, EscaladeSetup, Goal, TransferAnalysis, AXES};
 use crate::estimate::{estimate_seconds_on, is_upper_bound};
 use crate::export;
 use crate::numbers;
@@ -38,7 +38,8 @@ enum EscaladeView {
     Waveform,
     /// Final magnetisation across offsets.
     Profile,
-    /// Final y magnetisation over offset and field, and the phase slope.
+    /// Final magnetisation along the target over offset and field, and the
+    /// phase slope.
     B1,
 }
 
@@ -59,8 +60,11 @@ pub struct QoalaApp {
     result: Option<(Problem, Finished)>,
     /// What an ESCALADE result's pulse does, worked out when it arrived.
     analysis: Option<Analysis>,
-    /// The B1 map as an image, made the first time it is drawn.
-    map_texture: Option<egui::TextureHandle>,
+    /// Which of the result's transfers the profile and B1 views show.
+    transfer: usize,
+    /// The B1 map of one transfer as an image, made the first time it is
+    /// drawn, with the transfer it belongs to.
+    map_texture: Option<(usize, egui::TextureHandle)>,
     /// The problem the run in flight was started from.
     running: Option<Problem>,
     message: Option<String>,
@@ -116,6 +120,7 @@ impl QoalaApp {
             history: Vec::new(),
             result: None,
             analysis: None,
+            transfer: 0,
             map_texture: None,
             running: None,
             message,
@@ -657,13 +662,32 @@ impl QoalaApp {
                     ui.add(si_value(&mut s.sw_hz, "Hz", 0.0..=MAX_FREQUENCY, 100.0));
                     ui.end_row();
 
-                    ui.label("from");
-                    direction_menu(ui, "from", &mut s.from);
+                    ui.label("goal");
+                    ui.horizontal(|ui| {
+                        for goal in Goal::ALL {
+                            ui.selectable_value(&mut s.goal, goal, goal.name());
+                        }
+                    });
                     ui.end_row();
 
-                    ui.label("to");
-                    direction_menu(ui, "to", &mut s.to);
-                    ui.end_row();
+                    match s.goal {
+                        Goal::Transfer => {
+                            ui.label("from");
+                            direction_menu(ui, "from", &mut s.from);
+                            ui.end_row();
+
+                            ui.label("to");
+                            direction_menu(ui, "to", &mut s.to);
+                            ui.end_row();
+                        }
+                        Goal::Rotation => {
+                            for (axis, image) in AXES.iter().zip(&mut s.rotation) {
+                                ui.label(format!("{} to", axis.name()));
+                                direction_menu(ui, axis.name(), image);
+                                ui.end_row();
+                            }
+                        }
+                    }
                 });
                 ui.label(
                     egui::RichText::new(format!(
@@ -675,6 +699,16 @@ impl QoalaApp {
                     .small()
                     .weak(),
                 );
+                if s.goal == Goal::Rotation {
+                    ui.label(
+                        egui::RichText::new(
+                            "the fidelity compares the whole propagator with the rotation's, \
+                             sign included: 0.999 is about 0.997 averaged over x, y and z",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
             });
     }
 
@@ -956,6 +990,9 @@ impl QoalaApp {
                 ui.selectable_value(&mut self.view, EscaladeView::Waveform, "Waveform");
                 ui.selectable_value(&mut self.view, EscaladeView::Profile, "Offset profile");
                 ui.selectable_value(&mut self.view, EscaladeView::B1, "B1 robustness");
+                if self.view != EscaladeView::Waveform {
+                    self.transfer_menu(ui);
+                }
             });
         }
         let view = match self.algorithm {
@@ -1137,16 +1174,43 @@ impl QoalaApp {
             });
     }
 
+    /// A choice of which transfer the profile and B1 views show, when a
+    /// result has more than one.
+    fn transfer_menu(&mut self, ui: &mut egui::Ui) {
+        let Some(analysis) = &self.analysis else {
+            return;
+        };
+        let transfers = &analysis.transfers;
+        if transfers.len() < 2 {
+            return;
+        }
+        let label = |t: &TransferAnalysis| format!("{} to {}", t.from.name(), t.to.name());
+        ui.separator();
+        ui.label("transfer");
+        let current = self.transfer.min(transfers.len() - 1);
+        egui::ComboBox::from_id_salt("transfer")
+            .selected_text(label(&transfers[current]))
+            .show_ui(ui, |ui| {
+                for (k, t) in transfers.iter().enumerate() {
+                    ui.selectable_value(&mut self.transfer, k, label(t));
+                }
+            });
+    }
+
     /// Final magnetisation across offsets, as `ESCALADE_pulse_sim` plots it.
     fn profile_plot(&mut self, ui: &mut egui::Ui) {
-        let (Some(analysis), Some((Problem::Escalade(setup), _))) = (&self.analysis, &self.result)
-        else {
+        let (Some((_, shown)), Some((Problem::Escalade(setup), _))) = (
+            shown_transfer(self.analysis.as_ref(), self.transfer),
+            &self.result,
+        ) else {
             waiting(ui, "the offset profile appears when the run finishes");
             return;
         };
         ui.label(format!(
-            "final magnetisation from {} at the nominal field; the optimised band is +/- {} Hz",
-            setup.from.name(),
+            "final magnetisation from {} (target {}) at the nominal field; \
+             the optimised band is +/- {} Hz",
+            shown.from.name(),
+            shown.to.name(),
             numbers::rounded(setup.sw_hz / 2.0)
         ));
 
@@ -1176,7 +1240,7 @@ impl QoalaApp {
             .include_y(1.05)
             .show(ui, |plot_ui| {
                 for (name, component) in series {
-                    let points: Vec<[f64; 2]> = analysis
+                    let points: Vec<[f64; 2]> = shown
                         .profile
                         .iter()
                         .map(|p| [p.offset_hz, component(&p.m)])
@@ -1195,26 +1259,32 @@ impl QoalaApp {
             });
     }
 
-    /// The offset-by-field map of Iy and the phase slope, as
-    /// `ESCALADE_Bloch_B1` plots them.
+    /// The offset-by-field map along the target and the phase slope, as
+    /// `ESCALADE_Bloch_B1` plots them (it maps Iy, the target of its z to -y
+    /// runs).
     fn b1_plots(&mut self, ui: &mut egui::Ui) {
-        let (Some(analysis), Some((Problem::Escalade(setup), _))) = (&self.analysis, &self.result)
-        else {
+        let (Some((k, shown)), Some((Problem::Escalade(setup), _))) = (
+            shown_transfer(self.analysis.as_ref(), self.transfer),
+            &self.result,
+        ) else {
             waiting(ui, "the B1 maps appear when the run finishes");
             return;
         };
-        let texture = self
-            .map_texture
-            .get_or_insert_with(|| {
-                ui.ctx().load_texture(
+        let texture = match &self.map_texture {
+            Some((drawn, texture)) if *drawn == k => texture.id(),
+            _ => {
+                let texture = ui.ctx().load_texture(
                     "b1-map",
-                    colour_map(&analysis.map),
+                    colour_map(&shown.map),
                     egui::TextureOptions::LINEAR,
-                )
-            })
-            .id();
+                );
+                let id = texture.id();
+                self.map_texture = Some((k, texture));
+                id
+            }
+        };
 
-        let map = &analysis.map;
+        let map = &shown.map;
         let (x0, x1) = (
             map.offsets_hz.first().copied().unwrap_or(0.0),
             map.offsets_hz.last().copied().unwrap_or(0.0),
@@ -1229,10 +1299,15 @@ impl QoalaApp {
             fields.first().copied().unwrap_or(setup.rf_hz) / setup.rf_hz,
             fields.last().copied().unwrap_or(setup.rf_hz) / setup.rf_hz,
         );
-        let dphi = &analysis.dphi;
+        let dphi = &shown.dphi;
 
         ui.columns(2, |columns| {
-            columns[0].label("final Iy over offset and field  (blue -1, white 0, red +1)");
+            columns[0].label(format!(
+                "final magnetisation from {} along the target {} over offset and field  \
+                 (blue -1, white 0, red +1)",
+                shown.from.name(),
+                shown.to.name()
+            ));
             Plot::new("b1-map")
                 .allow_scroll(false)
                 .x_axis_label("offset, Hz")
@@ -1247,7 +1322,7 @@ impl QoalaApp {
                 })
                 .show(&mut columns[0], |plot_ui| {
                     plot_ui.image(PlotImage::new(
-                        "Iy",
+                        "along target",
                         texture,
                         PlotPoint::new((x0 + x1) / 2.0, (y0 + y1) / 2.0),
                         egui::vec2((x1 - x0) as f32, (y1 - y0) as f32),
@@ -1270,7 +1345,10 @@ impl QoalaApp {
                     }
                 });
 
-            columns[1].label("on-resonance phase change across +/- 0.5 % of B1");
+            columns[1].label(format!(
+                "on-resonance phase change from {} across +/- 0.5 % of B1",
+                shown.from.name()
+            ));
             Plot::new("dphi")
                 .allow_scroll(false)
                 .x_axis_label("B1 / nominal")
@@ -1285,19 +1363,28 @@ impl QoalaApp {
 
 // --------------------------------------------------------------- bits -----
 
+/// Transfer `k` of `analysis`, or its last if it has fewer, with the index
+/// actually shown.
+fn shown_transfer(analysis: Option<&Analysis>, k: usize) -> Option<(usize, &TransferAnalysis)> {
+    let transfers = &analysis?.transfers;
+    let k = k.min(transfers.len().checked_sub(1)?);
+    Some((k, &transfers[k]))
+}
+
 fn waiting(ui: &mut egui::Ui, text: &str) {
     ui.centered_and_justified(|ui| {
         ui.label(egui::RichText::new(text).weak());
     });
 }
 
-/// Iy in `[-1, 1]` on a blue-white-red scale, highest field in the top row.
+/// The map's values in `[-1, 1]` on a blue-white-red scale, highest field in
+/// the top row.
 fn colour_map(map: &qoala::escalade::profile::B1Map) -> egui::ColorImage {
-    let (rows, cols) = map.iy.shape();
+    let (rows, cols) = map.values.shape();
     let mut pixels = Vec::with_capacity(rows * cols);
     for r in (0..rows).rev() {
         for c in 0..cols {
-            pixels.push(diverging(map.iy[(r, c)]));
+            pixels.push(diverging(map.values[(r, c)]));
         }
     }
     egui::ColorImage::new([cols, rows], pixels)

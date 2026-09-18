@@ -4,6 +4,54 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0]
+
+### Added
+
+- **ESCALADE optimises universal rotations.** `Goal::Rotation(W)` asks for
+  every spin to end with the propagator `W`, whatever state it starts in:
+  x to x, y to z and z to -y for `rotation([1.0, 0.0, 0.0], FRAC_PI_2)`, the
+  new helper building `W` from an axis and an angle. The fidelity is the
+  propagator overlap `Re tr(W^dagger U) / 2`, averaged over spins and
+  weighted over fields as before, with its gradient and exact Hessian. It is
+  what a rotation run reports and stops on, and it is stricter than the
+  average over the three axes: 0.999 is 0.9973 there.
+
+  It tells `U` from `-U`, which turn every axis alike. Scoring the three
+  transfers x, y and z instead cannot, and lets parts of the band settle on
+  opposite signs: the spins between them are then held 180 degrees from the
+  target, where that score's gradient vanishes. A 90-degree rotation across
+  30 kHz with a 17 kHz field in 200 microseconds stalled at 0.638 that way
+  from every start tried, and reaches 0.9993 in 2000 L-BFGS iterations
+  scored on the propagator.
+- **The application designs universal rotations.** Single-qubit problems
+  have a goal: State transfer, as before, or Universal rotation, set by where
+  +x, +y and +z go. Anything that is not a proper rotation is refused with a
+  message. The rotation is optimised on its propagator, taking the sign
+  that turns by at most 180 degrees. For a rotation, the offset profile and
+  B1 views have a menu choosing which axis they follow. A new preset rotates
+  by 90 degrees about x across 10 kHz.
+
+### Changed
+
+- **Breaking: `Escalade` takes `goal: Goal`** in place of `initial` and
+  `target`. Replace `initial: a, target: b` with
+  `goal: Goal::Transfer { initial: a, target: b }`. `Settings::initial` and
+  `Settings::target` are likewise `Settings::goal`, a `Goal<Vec<Op2>>` holding
+  each spin's states. State transfers give bit-for-bit the same results as
+  1.3.0.
+- **Breaking: `escalade::profile` takes a starting magnetisation.**
+  `final_magnetisation`, `offset_profile` and `phase_sensitivity` take a
+  `start`, and `b1_map` a `start` and an `along`; pass
+  `Magnetisation::new(0.0, 0.0, 1.0)` and, for the map,
+  `Magnetisation::new(0.0, 1.0, 0.0)` for what 1.3.0 computed. `B1Map::iy` is
+  now `B1Map::values`. `Magnetisation` gains `new` and `dot`.
+- **The application's B1 map shows the final magnetisation along the target**
+  rather than Iy, so that red means the transfer succeeded whatever the
+  target. For the z to -y presets this is the old map with its sign flipped.
+  Links, stored sessions and exported setups from earlier versions still
+  load, as state transfers.
+
 ## [1.3.0]
 
 ### Added
